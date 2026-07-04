@@ -4,6 +4,9 @@ import torch.nn.functional as F
 import argparse
 from dataset_norm import convert2real_dataBGR
 import utils
+
+# Use CUDA when available, otherwise fall back to CPU (e.g. Streamlit Cloud).
+_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def weights_init(net, init_type = '', init_gain = 0.02):
     """Initialize network weights.
     Parameters:
@@ -183,10 +186,10 @@ class LensTransformer(nn.Module):
         self.tau_end = 0.01
         self.opt = opt
         self.ri_atol=1e-6
-        self.Y_real_max_9 = torch.tensor([43,  60,  35,  48, 46],dtype=torch.float32).cuda()
-        self.Y_real_min_9 = torch.tensor([10,   0.2,  0.1, 0.2, 1], dtype=torch.float32).cuda()
-        self.Y_real_max_11 = torch.tensor([85,   50,   33,   48, 32, 32], dtype=torch.float32).cuda()
-        self.Y_real_min_11 = torch.tensor([10,  0.2,  0.2,   2,  0.2,1], dtype=torch.float32).cuda()
+        self.Y_real_max_9 = torch.tensor([43,  60,  35,  48, 46],dtype=torch.float32).to(_DEVICE)
+        self.Y_real_min_9 = torch.tensor([10,   0.2,  0.1, 0.2, 1], dtype=torch.float32).to(_DEVICE)
+        self.Y_real_max_11 = torch.tensor([85,   50,   33,   48, 32, 32], dtype=torch.float32).to(_DEVICE)
+        self.Y_real_min_11 = torch.tensor([10,  0.2,  0.2,   2,  0.2,1], dtype=torch.float32).to(_DEVICE)
         #现在zemax里优化，确定距离限制（物理意义）
 
     # ===== 根据 RI 找库组索引 =====
