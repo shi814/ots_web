@@ -1,16 +1,17 @@
 # ScanLens web app dependencies (CPU-only, for Streamlit Community Cloud).
 #
-# IMPORTANT: deploy with Python 3.12 (Advanced settings on Streamlit Cloud).
-# torch 2.2.2 only ships wheels for Python 3.11/3.12, and is built against
-# numpy 1.x, so numpy is pinned below 2.
+# The PyTorch CPU wheel index is set as the PRIMARY index so that `torch`
+# resolves to the small "+cpu" build (not the multi-GB CUDA wheel from PyPI).
+# Everything else falls back to PyPI via --extra-index-url.
 #
-# The "+cpu" local version tag matches the wheel published on the PyTorch CPU
-# index exactly (a bare "torch==2.2.2" fails to resolve against "2.2.2+cpu"
-# under uv, which Streamlit Cloud uses).
---extra-index-url https://download.pytorch.org/whl/cpu
+# torch is intentionally left unpinned so it picks the CPU wheel that matches
+# whatever Python version Streamlit Cloud uses (e.g. 3.12 -> ..., 3.14 -> 2.12.1+cpu).
+# numpy is left unpinned for the same reason (numpy 2 is required on Python 3.13+).
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
 
-torch==2.2.2+cpu
-numpy<2
+torch
+numpy
 pandas
 matplotlib
 seaborn
