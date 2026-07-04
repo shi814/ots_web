@@ -727,15 +727,15 @@ def _load_bytes(path: str) -> bytes:
     return Path(path).read_bytes()
 
 
-def _render_one_system(
+def _compute_one_system(
     rank: int,
     sys_info: dict,
     metrics_csv: Path,
     glass_csv: str,
     base_out_dir: Path,
-    target_fn: float,
-    target_hfov: float,
-) -> None:
+) -> dict:
+    """Export files and render plots for one system. Returns only paths so the
+    result can be cached in st.session_state and re-displayed across reruns."""
     row_idx = int(sys_info["row_idx"])
     out_dir = base_out_dir / f"system_{rank}_row{row_idx:05d}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -754,22 +754,37 @@ def _render_one_system(
         row_idx=row_idx,
     )
 
+    return {
+        "rank": rank,
+        "row_idx": row_idx,
+        "zmx_path": str(zmx_path),
+        "json_path": str(json_path),
+        "layout_path": vis["layout_path"],
+        "spot_path": vis["spot_path"],
+        "distortion_path": vis["distortion_path"],
+    }
+
+
+def _display_one_system(data: dict) -> None:
+    rank = data["rank"]
+    row_idx = data["row_idx"]
+
     st.markdown(f"### System {rank}")
 
     with st.container(border=True):
         d1, d2 = st.columns(2)
         d1.download_button(
             "Download ZMX",
-            data=_load_bytes(zmx_path),
-            file_name=Path(zmx_path).name,
+            data=_load_bytes(data["zmx_path"]),
+            file_name=Path(data["zmx_path"]).name,
             mime="application/octet-stream",
             use_container_width=True,
             key=f"zmx_{rank}_{row_idx}",
         )
         d2.download_button(
             "Download JSON",
-            data=_load_bytes(json_path),
-            file_name=Path(json_path).name,
+            data=_load_bytes(data["json_path"]),
+            file_name=Path(data["json_path"]).name,
             mime="application/json",
             use_container_width=True,
             key=f"json_{rank}_{row_idx}",
@@ -777,13 +792,16 @@ def _render_one_system(
 
     left, right = st.columns([2, 1], gap="large")
     with left:
-        st.image(vis["layout_path"], caption="2D Layout", use_container_width=True)
-        st.image(vis["spot_path"], caption="Spot Diagram", use_container_width=True)
+        st.image(data["layout_path"], caption="2D Layout", use_container_width=True)
+        st.image(data["spot_path"], caption="Spot Diagram", use_container_width=True)
     with right:
-        st.image(vis["distortion_path"], caption="Distortion", use_container_width=True)
+        st.image(data["distortion_path"], caption="Distortion", use_container_width=True)
 
 
-def _run_full_pipeline(target_fn: float, target_hfov: float) -> None:
+def _run_full_pipeline(target_fn: float, target_hfov: float) -> list:
+    """Run the whole pipeline and return a list of computed-system dicts
+    (empty list means no qualifying system). Rendering is done by the caller
+    from session_state so results survive download-button reruns."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_out_dir = PROJECT_ROOT / "web_outputs" / f"fn{target_fn:g}_hfov{target_hfov:g}_{timestamp}"
     base_out_dir.mkdir(parents=True, exist_ok=True)
@@ -798,20 +816,21 @@ def _run_full_pipeline(target_fn: float, target_hfov: float) -> None:
         top_systems = select_top_systems(metrics_csv, NUM_TOP_SYSTEMS)
 
     if not top_systems:
-        st.warning("No qualifying system found.")
-        return
+        return []
 
+    systems = []
     with st.spinner("Exporting ZMX and generating plots..."):
         for rank, sys_info in enumerate(top_systems, start=1):
-            _render_one_system(
-                rank=rank,
-                sys_info=sys_info,
-                metrics_csv=metrics_csv,
-                glass_csv=glass_csv,
-                base_out_dir=base_out_dir,
-                target_fn=target_fn,
-                target_hfov=target_hfov,
+            systems.append(
+                _compute_one_system(
+                    rank=rank,
+                    sys_info=sys_info,
+                    metrics_csv=metrics_csv,
+                    glass_csv=glass_csv,
+                    base_out_dir=base_out_dir,
+                )
             )
+    return systems
 
 
 def _inject_css() -> None:
@@ -846,10 +865,24 @@ def run_app() -> None:
     target_hfov = col2.number_input("Target HFOV (deg)", value=8.5, format="%.6f")
 
     if st.button("Generate & Filter Systems", type="primary"):
+        # Reset previous results so a failed run does not show stale output.
+        st.session_state["results"] = None
         try:
-            _run_full_pipeline(float(target_fn), float(target_hfov))
+            st.session_state["results"] = _run_full_pipeline(
+                float(target_fn), float(target_hfov)
+            )
         except Exception as exc:
             st.exception(exc)
+
+    # Render from session_state on every run so that clicking a download
+    # button (which triggers a Streamlit rerun) does not clear the results.
+    results = st.session_state.get("results")
+    if results is not None:
+        if not results:
+            st.warning("No qualifying system found.")
+        else:
+            for data in results:
+                _display_one_system(data)
 
 
 if __name__ == "__main__":
