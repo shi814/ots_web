@@ -1,8 +1,15 @@
-# ScanLens web app dependencies (CPU-only, suitable for Streamlit Community Cloud).
-# torch is pulled from the CPU wheel index so the app runs without a GPU.
+# ScanLens web app dependencies (CPU-only, for Streamlit Community Cloud).
+#
+# IMPORTANT: deploy with Python 3.12 (Advanced settings on Streamlit Cloud).
+# torch 2.2.2 only ships wheels for Python 3.11/3.12, and is built against
+# numpy 1.x, so numpy is pinned below 2.
+#
+# The "+cpu" local version tag matches the wheel published on the PyTorch CPU
+# index exactly (a bare "torch==2.2.2" fails to resolve against "2.2.2+cpu"
+# under uv, which Streamlit Cloud uses).
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-torch==2.2.2
+torch==2.2.2+cpu
 numpy<2
 pandas
 matplotlib

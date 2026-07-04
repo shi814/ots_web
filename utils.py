@@ -364,7 +364,7 @@ def create_transformer_model(opt):
     group_mask, group_c, group_t, uniq_keys = get_OTS_CT()
     model = TransformerClass_Model.LensTransformer(opt, group_mask, group_c, group_t, uniq_keys)
     if opt.load_name:
-        trained_dict = torch.load(opt.load_name, map_location="cpu")
+        trained_dict = torch.load(opt.load_name, map_location="cpu", weights_only=False)
         load_dict(model, trained_dict)
         print('Generator is loaded!')
     else:
@@ -376,7 +376,7 @@ def create_transformer_val(opt, load_name):
     # Initialize the network
     group_mask, group_c, group_t, uniq_keys = get_OTS_CT()
     model = TransformerClass_Model.LensTransformer(opt,  group_mask, group_c, group_t, uniq_keys)
-    trained_dict = torch.load(load_name, map_location="cpu")
+    trained_dict = torch.load(load_name, map_location="cpu", weights_only=False)
     load_dict(model, trained_dict)
     print('Generator is loaded!')
     return model
