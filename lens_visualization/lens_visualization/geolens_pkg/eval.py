@@ -305,7 +305,7 @@ class GeoLensEval:
         ax.set_yticks(y_ticks)
 
         # Format tick labels
-        x_labels = [f"{x:.1f}%" for x in x_ticks]
+        x_labels = [f"{x:.1f}" for x in x_ticks]
         y_labels = [f"{y:.1f}" for y in y_ticks]
 
         ax.set_xticklabels(x_labels)
