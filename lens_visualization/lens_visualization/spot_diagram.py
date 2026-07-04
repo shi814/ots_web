@@ -325,17 +325,17 @@ def draw_spot_diagram_green(
     # 整体标题（增加与图的距离）
     fig.suptitle(title, fontsize=17, fontweight='bold', y=1.05)
     
-    # 在整个图形上添加统一的图例（右上角，垂直排列，白色背景框）
+    # 统一图例放在子图区域外的右侧，垂直居中，避免遮挡子图内的文字
     if legend_handles:
-        legend = fig.legend(handles=legend_handles, loc='upper right', 
-                           bbox_to_anchor=(0.98, 1.05), ncol=1,  # 往上挪，y从0.98改为1.0
-                           fontsize=14, framealpha=1.0, 
+        legend = fig.legend(handles=legend_handles, loc='center left',
+                           bbox_to_anchor=(1.0, 0.5), ncol=1,
+                           fontsize=14, framealpha=1.0,
                            fancybox=True, shadow=False,  # 取消阴影
                            facecolor='white',  # 白色背景
                            edgecolor='black',  # 黑色边框
                            frameon=True)  # 显示边框
     
-    plt.tight_layout(rect=[0, 0, 1, 0.94])  # 为图例和标题留出更多空间
+    plt.tight_layout(rect=[0, 0, 1, 0.94])  # 为标题留出空间；图例在画布外侧由 bbox_inches='tight' 自动容纳
     
     # 保存
     if save_path:
