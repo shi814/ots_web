@@ -1,0 +1,186 @@
+{
+    "info": "scanlens_from_csv_row",
+    "foclen": 43.875,
+    "fnum": 9.75,
+    "rfov": 0.157068,
+    "enpd": 4.5,
+    "r_sensor": 20.0,
+    "d_sensor": 75.278,
+    "sensor_size": [
+        40.0,
+        40.0
+    ],
+    "surfaces": [
+        {
+            "idx": 0,
+            "d": 0.0,
+            "curv": 0.0,
+            "n_bgr": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "semi_diam": 2.25,
+            "is_stop": true,
+            "material": {
+                "type": "air",
+                "name": null,
+                "nd": null,
+                "vd": null
+            },
+            "d_next": 10.0
+        },
+        {
+            "idx": 1,
+            "d": 10.0,
+            "curv": 0.0216403380036354,
+            "n_bgr": [
+                1.4387099742889404,
+                1.434030055999756,
+                1.431089997291565
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "glass",
+                "name": "CAF2",
+                "nd": 1.434030055999756,
+                "vd": 56.959496878959996
+            },
+            "d_next": 4.0
+        },
+        {
+            "idx": 2,
+            "d": 14.0,
+            "curv": 0.0,
+            "n_bgr": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "air",
+                "name": null,
+                "nd": null,
+                "vd": null
+            },
+            "d_next": 18.7183
+        },
+        {
+            "idx": 3,
+            "d": 32.71833610534668,
+            "curv": 0.0193498451262712,
+            "n_bgr": [
+                1.5253199338912964,
+                1.5171200037002563,
+                1.5118399858474731
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "glass",
+                "name": "N-BK7",
+                "nd": 1.5171200037002563,
+                "vd": 38.362165938555684
+            },
+            "d_next": 6.0
+        },
+        {
+            "idx": 4,
+            "d": 38.71833610534668,
+            "curv": 0.0,
+            "n_bgr": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "air",
+                "name": null,
+                "nd": null,
+                "vd": null
+            },
+            "d_next": 5.8276
+        },
+        {
+            "idx": 5,
+            "d": 44.5459098815918,
+            "curv": 0.0110570536926388,
+            "n_bgr": [
+                1.5253199338912964,
+                1.5171200037002563,
+                1.5118399858474731
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "glass",
+                "name": "N-BK7",
+                "nd": 1.5171200037002563,
+                "vd": 38.362165938555684
+            },
+            "d_next": 9.0
+        },
+        {
+            "idx": 6,
+            "d": 53.5459098815918,
+            "curv": 0.0,
+            "n_bgr": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "air",
+                "name": null,
+                "nd": null,
+                "vd": null
+            },
+            "d_next": 3.5724
+        },
+        {
+            "idx": 7,
+            "d": 57.11833333969116,
+            "curv": 0.0216403380036354,
+            "n_bgr": [
+                1.4387099742889404,
+                1.434030055999756,
+                1.431089997291565
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "glass",
+                "name": "CAF2",
+                "nd": 1.434030055999756,
+                "vd": 56.959496878959996
+            },
+            "d_next": 4.0
+        },
+        {
+            "idx": 8,
+            "d": 61.11833333969116,
+            "curv": 0.0,
+            "n_bgr": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "semi_diam": 50.0,
+            "is_stop": false,
+            "material": {
+                "type": "air",
+                "name": null,
+                "nd": null,
+                "vd": null
+            },
+            "d_next": 14.1596
+        }
+    ]
+}

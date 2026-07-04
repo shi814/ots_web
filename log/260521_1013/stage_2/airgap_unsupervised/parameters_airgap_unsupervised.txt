@@ -1,0 +1,227 @@
+EPD: 4.0
+air_delta_scale_mm: 60.0
+batch_size: 128
+clip_grad: 5.0
+distortion_mode: zemax_ftan
+distortion_ref_angle_deg: 0.01
+efl_filter_max_loss: 0.1
+efl_loss_tolerance: 0.1
+enable_efl_filter: True
+enable_rms_filter: True
+epochs: 5000
+hidden_size: 512
+input_size: 256
+load_name: /public/home/shijiaqi/ots/ots_v2/scanlens_v1/log/260521_1013/stage_1/checkpoints/SLT_rmsfilter_on_epoch5000_bs512.pth
+loss_EFL_formula: max(abs(EFL_ideal-EFL_est)/EFL_ideal - efl_loss_tolerance, 0)
+loss_filtering: hard_rms_filter=on, hard_efl_filter=on
+loss_formula: geomean(rms*(1+1000*loss_ray)*(1+100*loss_dist)*(1+10*loss_EFL)*(1+1000*loss_ovlp)*(1+1*loss_tele))
+loss_function: USL_Loss.stage1_geometric_v1
+lr: 0.0001
+max_rmsSpotR: 0.04
+max_rows: 0
+max_seq_length: 11
+metric_source: USL_Loss multiplicative metrics with apply_hard_filter=True, efl_filter_max_loss=0.1
+nField: 3
+nRayDensity: 11
+nWL: 3
+num_heads: 8
+num_layers: 6
+num_workers: 0
+output_size: 3
+save_by_epoch: 1000
+save_model_path: checkpoints
+save_path: /public/home/shijiaqi/ots/ots_v2/scanlens_v1/log/260521_1013/stage_2/airgap_unsupervised
+seed: 1013
+seq1: 9
+seq2: 11
+sys_dim: 2
+train_csv_path: /public/home/shijiaqi/ots/ots_v2/scanlens_v1/log/260521_1013/stage_1/train_output_metrics_pred_rmsfilter_on.csv
+usl_loss_variant: stage1_geometric_v1
+val_csv_path: /public/home/shijiaqi/ots/ots_v2/scanlens_v1/log/260521_1013/stage_1/val_output_metrics_pred_rmsfilter_on.csv
+weight_decay: 0.0
+zero_init_air_delta: True
+
+[Trainable]
+heads_A_9.0.block.0.weight
+heads_A_9.0.block.0.bias
+heads_A_9.1.block.0.weight
+heads_A_9.1.block.0.bias
+heads_A_9.2.block.0.weight
+heads_A_9.2.block.0.bias
+heads_A_9.3.block.0.weight
+heads_A_9.3.block.0.bias
+heads_A_9.4.block.0.weight
+heads_A_9.4.block.0.bias
+heads_A_9.5.block.0.weight
+heads_A_9.5.block.0.bias
+heads_A_9.6.block.0.weight
+heads_A_9.6.block.0.bias
+heads_A_9.7.block.0.weight
+heads_A_9.7.block.0.bias
+heads_A_9.8.block.0.weight
+heads_A_9.8.block.0.bias
+heads_A_11.0.block.0.weight
+heads_A_11.0.block.0.bias
+heads_A_11.1.block.0.weight
+heads_A_11.1.block.0.bias
+heads_A_11.2.block.0.weight
+heads_A_11.2.block.0.bias
+heads_A_11.3.block.0.weight
+heads_A_11.3.block.0.bias
+heads_A_11.4.block.0.weight
+heads_A_11.4.block.0.bias
+heads_A_11.5.block.0.weight
+heads_A_11.5.block.0.bias
+heads_A_11.6.block.0.weight
+heads_A_11.6.block.0.bias
+heads_A_11.7.block.0.weight
+heads_A_11.7.block.0.bias
+heads_A_11.8.block.0.weight
+heads_A_11.8.block.0.bias
+heads_A_11.9.block.0.weight
+heads_A_11.9.block.0.bias
+heads_A_11.10.block.0.weight
+heads_A_11.10.block.0.bias
+
+[Frozen]
+embedding.token_fc_list.0.weight
+embedding.token_fc_list.0.bias
+embedding.token_fc_list.1.weight
+embedding.token_fc_list.1.bias
+embedding.token_fc_list.2.weight
+embedding.token_fc_list.2.bias
+embedding.token_fc_list.3.weight
+embedding.token_fc_list.3.bias
+embedding.token_fc_list.4.weight
+embedding.token_fc_list.4.bias
+embedding.token_fc_list.5.weight
+embedding.token_fc_list.5.bias
+embedding.token_fc_list.6.weight
+embedding.token_fc_list.6.bias
+embedding.token_fc_list.7.weight
+embedding.token_fc_list.7.bias
+embedding.token_fc_list.8.weight
+embedding.token_fc_list.8.bias
+embedding.token_fc_list.9.weight
+embedding.token_fc_list.9.bias
+embedding.token_fc_list.10.weight
+embedding.token_fc_list.10.bias
+embedding.sys_proj.weight
+embedding.sys_proj.bias
+embedding.type_emb.weight
+pos_emb.pe
+pos_emb.repe
+pos_emb.proj.weight
+pos_emb.proj.bias
+transformer.layers.0.self_attn.in_proj_weight
+transformer.layers.0.self_attn.in_proj_bias
+transformer.layers.0.self_attn.out_proj.weight
+transformer.layers.0.self_attn.out_proj.bias
+transformer.layers.0.linear1.weight
+transformer.layers.0.linear1.bias
+transformer.layers.0.linear2.weight
+transformer.layers.0.linear2.bias
+transformer.layers.0.norm1.weight
+transformer.layers.0.norm1.bias
+transformer.layers.0.norm2.weight
+transformer.layers.0.norm2.bias
+transformer.layers.1.self_attn.in_proj_weight
+transformer.layers.1.self_attn.in_proj_bias
+transformer.layers.1.self_attn.out_proj.weight
+transformer.layers.1.self_attn.out_proj.bias
+transformer.layers.1.linear1.weight
+transformer.layers.1.linear1.bias
+transformer.layers.1.linear2.weight
+transformer.layers.1.linear2.bias
+transformer.layers.1.norm1.weight
+transformer.layers.1.norm1.bias
+transformer.layers.1.norm2.weight
+transformer.layers.1.norm2.bias
+transformer.layers.2.self_attn.in_proj_weight
+transformer.layers.2.self_attn.in_proj_bias
+transformer.layers.2.self_attn.out_proj.weight
+transformer.layers.2.self_attn.out_proj.bias
+transformer.layers.2.linear1.weight
+transformer.layers.2.linear1.bias
+transformer.layers.2.linear2.weight
+transformer.layers.2.linear2.bias
+transformer.layers.2.norm1.weight
+transformer.layers.2.norm1.bias
+transformer.layers.2.norm2.weight
+transformer.layers.2.norm2.bias
+transformer.layers.3.self_attn.in_proj_weight
+transformer.layers.3.self_attn.in_proj_bias
+transformer.layers.3.self_attn.out_proj.weight
+transformer.layers.3.self_attn.out_proj.bias
+transformer.layers.3.linear1.weight
+transformer.layers.3.linear1.bias
+transformer.layers.3.linear2.weight
+transformer.layers.3.linear2.bias
+transformer.layers.3.norm1.weight
+transformer.layers.3.norm1.bias
+transformer.layers.3.norm2.weight
+transformer.layers.3.norm2.bias
+transformer.layers.4.self_attn.in_proj_weight
+transformer.layers.4.self_attn.in_proj_bias
+transformer.layers.4.self_attn.out_proj.weight
+transformer.layers.4.self_attn.out_proj.bias
+transformer.layers.4.linear1.weight
+transformer.layers.4.linear1.bias
+transformer.layers.4.linear2.weight
+transformer.layers.4.linear2.bias
+transformer.layers.4.norm1.weight
+transformer.layers.4.norm1.bias
+transformer.layers.4.norm2.weight
+transformer.layers.4.norm2.bias
+transformer.layers.5.self_attn.in_proj_weight
+transformer.layers.5.self_attn.in_proj_bias
+transformer.layers.5.self_attn.out_proj.weight
+transformer.layers.5.self_attn.out_proj.bias
+transformer.layers.5.linear1.weight
+transformer.layers.5.linear1.bias
+transformer.layers.5.linear2.weight
+transformer.layers.5.linear2.bias
+transformer.layers.5.norm1.weight
+transformer.layers.5.norm1.bias
+transformer.layers.5.norm2.weight
+transformer.layers.5.norm2.bias
+class_heads_G_9.0.fc_logits.weight
+class_heads_G_9.0.fc_logits.bias
+class_heads_G_9.1.fc_logits.weight
+class_heads_G_9.1.fc_logits.bias
+class_heads_G_9.2.fc_logits.weight
+class_heads_G_9.2.fc_logits.bias
+class_heads_G_9.3.fc_logits.weight
+class_heads_G_9.3.fc_logits.bias
+class_heads_G_9.4.fc_logits.weight
+class_heads_G_9.4.fc_logits.bias
+class_heads_G_9.5.fc_logits.weight
+class_heads_G_9.5.fc_logits.bias
+class_heads_G_9.6.fc_logits.weight
+class_heads_G_9.6.fc_logits.bias
+class_heads_G_9.7.fc_logits.weight
+class_heads_G_9.7.fc_logits.bias
+class_heads_G_9.8.fc_logits.weight
+class_heads_G_9.8.fc_logits.bias
+class_heads_G_11.0.fc_logits.weight
+class_heads_G_11.0.fc_logits.bias
+class_heads_G_11.1.fc_logits.weight
+class_heads_G_11.1.fc_logits.bias
+class_heads_G_11.2.fc_logits.weight
+class_heads_G_11.2.fc_logits.bias
+class_heads_G_11.3.fc_logits.weight
+class_heads_G_11.3.fc_logits.bias
+class_heads_G_11.4.fc_logits.weight
+class_heads_G_11.4.fc_logits.bias
+class_heads_G_11.5.fc_logits.weight
+class_heads_G_11.5.fc_logits.bias
+class_heads_G_11.6.fc_logits.weight
+class_heads_G_11.6.fc_logits.bias
+class_heads_G_11.7.fc_logits.weight
+class_heads_G_11.7.fc_logits.bias
+class_heads_G_11.8.fc_logits.weight
+class_heads_G_11.8.fc_logits.bias
+class_heads_G_11.9.fc_logits.weight
+class_heads_G_11.9.fc_logits.bias
+class_heads_G_11.10.fc_logits.weight
+class_heads_G_11.10.fc_logits.bias

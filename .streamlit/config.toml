@@ -1,0 +1,11 @@
+[server]
+# The second-stage test can take a few minutes on CPU; keep uploads small
+# and give long-running scripts room to finish.
+maxUploadSize = 20
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"

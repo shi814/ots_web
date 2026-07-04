@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Web app runtime outputs (generated per request; never commit)
+# ---------------------------------------------------------------------------
+web_outputs/
+exports/zmx_json_*/
+
+# ---------------------------------------------------------------------------
+# Large training/testing logs.
+# Strategy: at every level ignore the direct children (dir/*) and only
+# re-open the single path that leads to the files the web app needs. This
+# keeps sibling outputs ignored while committing just the two checkpoints and
+# the AirGap parameters file.
+# ---------------------------------------------------------------------------
+log/*
+!log/260521_1013/
+
+log/260521_1013/*
+!log/260521_1013/stage_1/
+!log/260521_1013/stage_2/
+
+# stage-1 base checkpoint
+log/260521_1013/stage_1/*
+!log/260521_1013/stage_1/checkpoints/
+log/260521_1013/stage_1/checkpoints/*
+!log/260521_1013/stage_1/checkpoints/SLT_rmsfilter_on_epoch5000_bs512.pth
+
+# stage-2 AirGap checkpoint + parameters
+log/260521_1013/stage_2/*
+!log/260521_1013/stage_2/airgap_unsupervised/
+log/260521_1013/stage_2/airgap_unsupervised/*
+!log/260521_1013/stage_2/airgap_unsupervised/parameters_airgap_unsupervised.txt
+!log/260521_1013/stage_2/airgap_unsupervised/checkpoints/
+log/260521_1013/stage_2/airgap_unsupervised/checkpoints/*
+!log/260521_1013/stage_2/airgap_unsupervised/checkpoints/AirGapUnsupervised_final.pth
+
+# ---------------------------------------------------------------------------
+# OS / editor cruft
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
