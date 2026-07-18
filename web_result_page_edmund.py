@@ -722,16 +722,18 @@ def generate_visuals(
     except Exception as exc:
         # Exporter JSON is new-format in many runs. Convert to DeepLens standard JSON, then retry.
         converted_json = out_dir / f"{Path(json_path).stem}_converted.json"
-        convert_and_save(json_path, str(converted_json), use_ray_tracing=True)
-        _fix_converted_aperture_for_display(converted_json)
-        _unify_aperture_for_display(converted_json)
         try:
+            convert_and_save(json_path, str(converted_json), use_ray_tracing=True)
+            _fix_converted_aperture_for_display(converted_json)
+            _unify_aperture_for_display(converted_json)
             visualizer = LensVisualizer(str(converted_json), device="cpu")
-        except Exception:
+        except Exception as exc2:
             raise RuntimeError(
                 "Failed to load lens JSON for visualization. "
-                "Both original and converted JSON were not accepted."
-            ) from exc
+                "Both original and converted JSON were not accepted.\n"
+                f"Original-load error: {type(exc).__name__}: {exc}\n"
+                f"Converted-load error: {type(exc2).__name__}: {exc2}"
+            ) from exc2
 
     layout_path = out_dir / "lens_2d_layout.png"
     spot_path = out_dir / "lens_spot_diagram.png"
