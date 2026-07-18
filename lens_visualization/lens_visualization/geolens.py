@@ -1757,6 +1757,15 @@ class GeoLens(Lens, GeoLensEval, GeoLensVis, GeoLensIO):
         """
         N = origins.shape[0]
 
+        # Need at least two rays to form a pair. With fewer, ``torch.combinations``
+        # yields an empty batch and calling ``torch.linalg.lstsq`` on it triggers a
+        # backend error (locally: Intel oneMKL "Parameter 4 ... SGELSY"; on the
+        # Streamlit Cloud torch build: RuntimeError "Batch element 0: Argument 4
+        # has illegal value"). Return no intersection points so callers fall back
+        # to their surface-based pupil estimate.
+        if N < 2:
+            return origins.new_zeros((0, 2))
+
         # Create pairwise combinations of indices
         idx = torch.arange(N)
         idx_i, idx_j = torch.combinations(idx, r=2).unbind(1)
