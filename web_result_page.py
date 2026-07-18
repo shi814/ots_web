@@ -69,6 +69,17 @@ def discover_glass_matching_csv(metrics_csv: Path) -> str:
     return str(candidates[0]) if candidates else ""
 
 
+def infer_efl_sidecar_csv(metrics_csv: Path) -> Path | None:
+    name = metrics_csv.name
+    if name.startswith("test_output_metrics_pred"):
+        candidate = metrics_csv.with_name(
+            name.replace("test_output_metrics_pred", "test_output_efl", 1)
+        )
+        if candidate.exists():
+            return candidate
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 1) Generate a 200-arrangement raw test set for the requested (F#, HFOV).
 # ---------------------------------------------------------------------------
@@ -237,7 +248,18 @@ def select_top_systems(metrics_csv: Path, top_n: int = NUM_TOP_SYSTEMS) -> list[
     tele = pd.to_numeric(df.iloc[:, -5], errors="coerce")
     efl_est = pd.to_numeric(df.iloc[:, -2], errors="coerce")
     efl_ideal = pd.to_numeric(df.iloc[:, -1], errors="coerce")
-    efl_err = (efl_est - efl_ideal).abs() / (efl_ideal.abs() + 1e-10)
+    efl_ref = efl_est
+    efl_sidecar = infer_efl_sidecar_csv(metrics_csv)
+    if efl_sidecar is not None:
+        efl_df = pd.read_csv(efl_sidecar)
+        if (
+            len(efl_df) == len(df)
+            and "EFL_first_order" in efl_df.columns
+            and "EFL_ideal" in efl_df.columns
+        ):
+            efl_ref = pd.to_numeric(efl_df["EFL_first_order"], errors="coerce")
+            efl_ideal = pd.to_numeric(efl_df["EFL_ideal"], errors="coerce")
+    efl_err = (efl_ref - efl_ideal).abs() / (efl_ideal.abs() + 1e-10)
 
     passing = (
         (rms < SPEC_RMS_MAX)
@@ -860,9 +882,14 @@ def run_app() -> None:
         return
 
     st.subheader("Target Parameters")
+    st.caption("Suggested range: HFOV 8-10 deg, F# 9-17.5")
     col1, col2 = st.columns(2)
-    target_fn = col1.number_input("Target F#", value=9.75, format="%.6f")
-    target_hfov = col2.number_input("Target HFOV (deg)", value=8.5, format="%.6f")
+    target_fn = col1.number_input(
+        "Target F#", value=9.75, format="%.6f", help="Suggested range: 9-17.5"
+    )
+    target_hfov = col2.number_input(
+        "Target HFOV (deg)", value=8.5, format="%.6f", help="Suggested range: 8-10 deg"
+    )
 
     if st.button("Generate & Filter Systems", type="primary"):
         # Reset previous results so a failed run does not show stale output.
