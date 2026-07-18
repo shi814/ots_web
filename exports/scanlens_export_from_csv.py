@@ -27,8 +27,6 @@
   - JSON文件：包含完整的镜头参数信息
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import math

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Match predicted test rows to nearby GT systems and write a Markdown report."""
 
-from __future__ import annotations
-
 import argparse
 import os
 from dataclasses import dataclass
@@ -40,6 +38,7 @@ class LensRow:
     dist: float | None = None
     tele: float | None = None
     efl_est: float | None = None
+    efl_first_order: float | None = None
     efl_ideal: float | None = None
     loss_efl: float | None = None
 
@@ -129,8 +128,26 @@ def _display_curvature_as_radius(curvature: float) -> str:
     return _fmt(1.0 / float(curvature), digits=5)
 
 
+def _infer_efl_sidecar_path(pred_csv: str) -> str | None:
+    dirname, basename = os.path.split(pred_csv)
+    if basename.startswith("test_output_metrics_pred"):
+        candidate = os.path.join(
+            dirname,
+            basename.replace("test_output_metrics_pred", "test_output_efl", 1),
+        )
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def _load_pred_rows(pred_csv: str) -> list[LensRow]:
     df = pd.read_csv(pred_csv, header=None)
+    efl_df = None
+    efl_sidecar = _infer_efl_sidecar_path(pred_csv)
+    if efl_sidecar:
+        efl_df = pd.read_csv(efl_sidecar)
+        if len(efl_df) != len(df):
+            efl_df = None
     rows: list[LensRow] = []
     for row_idx, row in df.iterrows():
         vals = row.to_numpy(dtype=float)
@@ -143,9 +160,14 @@ def _load_pred_rows(pred_csv: str) -> list[LensRow]:
         tele = float(vals[-5]) if len(vals) >= 5 else None
         efl_est = float(vals[-2]) if len(vals) >= 2 else None
         efl_ideal = float(vals[-1]) if len(vals) >= 1 else None
+        efl_first_order = None
+        if efl_df is not None and {"EFL_first_order", "EFL_ideal"}.issubset(efl_df.columns):
+            efl_first_order = float(efl_df.loc[row_idx, "EFL_first_order"])
+            efl_ideal = float(efl_df.loc[row_idx, "EFL_ideal"])
         loss_efl = None
-        if efl_est is not None and efl_ideal is not None:
-            loss_efl = abs(efl_est - efl_ideal) / (abs(efl_ideal) + 1e-10)
+        efl_ref = efl_first_order if efl_first_order is not None else efl_est
+        if efl_ref is not None and efl_ideal is not None:
+            loss_efl = abs(efl_ref - efl_ideal) / (abs(efl_ideal) + 1e-10)
         rows.append(
             LensRow(
                 source="pred",
@@ -159,6 +181,7 @@ def _load_pred_rows(pred_csv: str) -> list[LensRow]:
                 dist=dist,
                 tele=tele,
                 efl_est=efl_est,
+                efl_first_order=efl_first_order,
                 efl_ideal=efl_ideal,
                 loss_efl=loss_efl,
             )
@@ -271,12 +294,13 @@ def _compute_usl_metrics_for_rows(
 
         metric_values = {
             key: metrics[key].detach().cpu().numpy()
-            for key in ("rms", "dist", "tele", "EFL_est", "EFL_ideal", "loss_EFL")
+            for key in ("rms", "dist", "tele", "EFL_est", "EFL_first_order", "EFL_ideal", "loss_EFL")
         }
         for i, row in enumerate(chunk):
             efl_est = float(metric_values["EFL_est"][i])
+            efl_first_order = float(metric_values["EFL_first_order"][i])
             efl_ideal = float(metric_values["EFL_ideal"][i])
-            efl_rel_error = abs(efl_est - efl_ideal) / (abs(efl_ideal) + 1e-10)
+            efl_rel_error = abs(efl_first_order - efl_ideal) / (abs(efl_ideal) + 1e-10)
             out_rows.append(
                 LensRow(
                     source=row.source,
@@ -290,6 +314,7 @@ def _compute_usl_metrics_for_rows(
                     dist=float(metric_values["dist"][i]),
                     tele=float(metric_values["tele"][i]),
                     efl_est=efl_est,
+                    efl_first_order=efl_first_order,
                     efl_ideal=efl_ideal,
                     loss_efl=float(efl_rel_error),
                 )
