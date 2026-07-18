@@ -39,7 +39,16 @@ try:
     # When imported as a package module: `from exports.scanlens_export_from_csv import ...`
     from .lens_export_utils import LensExporter
 except Exception:  # pragma: no cover
-    # When run as a script from repo root: `python exports/scanlens_export_from_csv.py`
+    # Robust fallback for when this module is re-executed outside a clean
+    # package context. This happens on Streamlit reruns (Python 3.14 can leave
+    # a stale ``None`` at ``sys.modules['exports.lens_export_utils']`` after an
+    # interrupted relative import) and when running the file as a script. We
+    # drop the stale marker and make ``exports/`` importable as a top level dir
+    # so ``import lens_export_utils`` always succeeds.
+    _EXPORTS_DIR = os.path.dirname(os.path.abspath(__file__))
+    if _EXPORTS_DIR not in sys.path:
+        sys.path.insert(0, _EXPORTS_DIR)
+    sys.modules.pop("lens_export_utils", None)
     from lens_export_utils import LensExporter
 
 
