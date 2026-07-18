@@ -78,7 +78,7 @@ class SpotDiagramCSVLensSystem:
             def __init__(self, n_surf):
                 self.N = 11
                 self.M = 3
-                self.nRayDensity = 11
+                self.nRayDensity = 21
                 self.nField = 3
                 self.nWL = 3
                 self.EPD = 4.0
