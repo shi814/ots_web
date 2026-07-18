@@ -812,11 +812,13 @@ def _display_one_system(data: dict) -> None:
             key=f"json_{rank}_{row_idx}",
         )
 
-    left, right = st.columns([2, 1], gap="large")
-    with left:
-        st.image(data["layout_path"], caption="2D Layout", use_container_width=True)
+    # Row 1: 2D layout on its own full-width row (larger).
+    st.image(data["layout_path"], caption="2D Layout", use_container_width=True)
+    # Row 2: spot diagram and distortion side by side.
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
         st.image(data["spot_path"], caption="Spot Diagram", use_container_width=True)
-    with right:
+    with c2:
         st.image(data["distortion_path"], caption="Distortion", use_container_width=True)
 
 
