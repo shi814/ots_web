@@ -814,8 +814,8 @@ def _display_one_system(data: dict) -> None:
 
     # Row 1: 2D layout on its own full-width row (larger).
     st.image(data["layout_path"], caption="2D Layout", use_container_width=True)
-    # Row 2: spot diagram and distortion side by side.
-    c1, c2 = st.columns(2, gap="large")
+    # Row 2: spot diagram (larger) and distortion (smaller) side by side.
+    c1, c2 = st.columns([2, 1], gap="large")
     with c1:
         st.image(data["spot_path"], caption="Spot Diagram", use_container_width=True)
     with c2:
