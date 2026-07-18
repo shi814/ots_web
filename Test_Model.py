@@ -13,6 +13,7 @@ Debug Date：2025-12-15，增加输出zmx和json功能
 from torch.utils.data import DataLoader
 from utils import *
 import os
+import numpy as np
 import pandas as pd
 
 from dataset_norm import (
@@ -59,6 +60,55 @@ def _with_tag(filename: str, tag: str) -> str:
     return f"{base}_{tag}{ext}"
 
 
+def _prefilter_missing_ri_arrays(opt, X_sys, X_bgr, X_type, *, context: str = "test"):
+    """
+    Skip whole lens rows whose glass RI triples are not present in material_csv.
+    This keeps old-OTS tests from crashing on materials that the old library
+    cannot choose, without editing the input CSV.
+    """
+    if not getattr(opt, "skip_missing_ri", False):
+        return X_sys, X_bgr, X_type, np.arange(X_sys.shape[0], dtype=int)
+
+    material = np.loadtxt(opt.material_csv, delimiter=",", dtype=float)
+    ri_atol = float(getattr(opt, "ri_atol", 1e-5))
+    material_keys = {
+        tuple(np.round(row[:3] / ri_atol).astype(np.int64).tolist())
+        for row in material
+    }
+
+    seq_lengths = X_sys[:, 2].astype(int)
+    with torch.no_grad():
+        bgr_real = convert2real_dataBGR(torch.tensor(X_bgr, dtype=torch.float32, device=device))
+    bgr_real = bgr_real.detach().cpu().numpy().reshape(-1, opt.max_seq_length, opt.nWL)
+
+    keep = np.ones(X_sys.shape[0], dtype=bool)
+    missing_examples = []
+    for row_idx in range(X_sys.shape[0]):
+        valid_len = int(seq_lengths[row_idx])
+        for pos in range(min(valid_len, opt.max_seq_length)):
+            if int(X_type[row_idx, pos]) != 1:
+                continue
+            ri = bgr_real[row_idx, pos]
+            key = tuple(np.round(ri / ri_atol).astype(np.int64).tolist())
+            if key not in material_keys:
+                keep[row_idx] = False
+                if len(missing_examples) < 5:
+                    missing_examples.append(ri.tolist())
+                break
+
+    skipped = int((~keep).sum())
+    if skipped:
+        print(
+            f"[SkipMissingRI:{context}] prefiltered {skipped}/{len(keep)} rows before DataLoader; "
+            f"missing RI examples: {missing_examples}"
+        )
+    else:
+        print(f"[SkipMissingRI:{context}] prefilter found no missing RI rows.")
+
+    kept_indices = np.flatnonzero(keep)
+    return X_sys[keep], X_bgr[keep], X_type[keep], kept_indices
+
+
 def _infer_loss_csv_path(opt, out_dir: str):
     """
     Try common run directories for log_loss.csv. Returning None is allowed:
@@ -94,20 +144,42 @@ def _short_export_tag(tag: str) -> str:
     return "all"
 
 
-def _filter_csv_by_efl_error(metrics_csv: str, loss_csv: str, threshold: float):
+def _filter_csv_by_efl_error(metrics_csv: str, loss_csv: str, threshold: float, efl_csv: str | None = None):
     """
     Keep only rows whose relative EFL error is below threshold.
 
-    metrics_csv tail layout stores EFL_est / EFL_ideal in the last two columns.
+    Prefer EFL_first_order from the sidecar EFL CSV, because it is aligned with
+    the current primary EFL loss. Fall back to the historical metrics CSV tail
+    layout, where the last two columns are EFL_est / EFL_ideal.
     The matching loss CSV has the same row order, so the same mask is applied.
     """
     metrics_df = pd.read_csv(metrics_csv, header=None)
     if metrics_df.shape[1] < 2:
         raise ValueError(f"Expected at least 2 columns in metrics CSV, got {metrics_df.shape[1]}")
 
-    efl_est = pd.to_numeric(metrics_df.iloc[:, -2], errors="coerce")
-    efl_ideal = pd.to_numeric(metrics_df.iloc[:, -1], errors="coerce")
-    efl_error = (efl_est - efl_ideal).abs() / (efl_ideal.abs() + 1e-10)
+    source_label = "EFL_est"
+    if efl_csv and os.path.exists(efl_csv):
+        efl_df = pd.read_csv(efl_csv)
+        if (
+            len(efl_df) == len(metrics_df)
+            and "EFL_first_order" in efl_df.columns
+            and "EFL_ideal" in efl_df.columns
+        ):
+            efl_ref = pd.to_numeric(efl_df["EFL_first_order"], errors="coerce")
+            efl_ideal = pd.to_numeric(efl_df["EFL_ideal"], errors="coerce")
+            source_label = "EFL_first_order"
+        else:
+            print(
+                f"[Warning] EFL CSV cannot be used for filtering; "
+                f"falling back to metrics CSV EFL_est: {efl_csv}"
+            )
+            efl_ref = pd.to_numeric(metrics_df.iloc[:, -2], errors="coerce")
+            efl_ideal = pd.to_numeric(metrics_df.iloc[:, -1], errors="coerce")
+    else:
+        efl_ref = pd.to_numeric(metrics_df.iloc[:, -2], errors="coerce")
+        efl_ideal = pd.to_numeric(metrics_df.iloc[:, -1], errors="coerce")
+
+    efl_error = (efl_ref - efl_ideal).abs() / (efl_ideal.abs() + 1e-10)
     keep_mask = efl_error < float(threshold)
 
     tag = f"eflerror_lt_{_threshold_tag(threshold)}"
@@ -128,8 +200,16 @@ def _filter_csv_by_efl_error(metrics_csv: str, loss_csv: str, threshold: float):
             filtered_loss_csv = f"{loss_root}_{tag}{loss_ext}"
             loss_df.loc[keep_mask].to_csv(filtered_loss_csv, header=False, index=False, encoding="utf-8")
 
+    if efl_csv and os.path.exists(efl_csv):
+        efl_df = pd.read_csv(efl_csv)
+        if len(efl_df) == len(metrics_df):
+            efl_root, efl_ext = os.path.splitext(efl_csv)
+            filtered_efl_csv = f"{efl_root}_{tag}{efl_ext}"
+            efl_df.loc[keep_mask].to_csv(filtered_efl_csv, header=True, index=False, encoding="utf-8")
+            print(f"[Filter] EFL CSV: {filtered_efl_csv}")
+
     print(
-        f"[Filter] EFL relative error < {threshold:g}: "
+        f"[Filter] {source_label} relative error < {threshold:g}: "
         f"kept {int(keep_mask.sum())}/{len(metrics_df)} rows"
     )
     print(f"[Filter] metrics CSV: {filtered_metrics_csv}")
@@ -448,6 +528,8 @@ def _forward_test_model(opt, model, base_model, X_sys, X_bgr_seq, X_type, X_seq_
 
 
 def test(opt):
+    os.environ["SCANLENS_MATERIAL_CSV"] = str(opt.material_csv)
+
     # ================== 功能开关配置 ==================
     # 只需要改这里的 True / False，即可控制对应功能是否执行
     ENABLE_FEATURES = {
@@ -505,6 +587,15 @@ def test(opt):
         X_val_sys, X_val_bgr, X_val_type = load_test_data(_test_csv)
     else:
         X_val_sys, X_val_bgr, X_val_type = load_test_data()
+    kept_row_indices = np.arange(X_val_sys.shape[0], dtype=int)
+    X_val_sys, X_val_bgr, X_val_type, kept_row_indices = _prefilter_missing_ri_arrays(
+        opt,
+        X_val_sys,
+        X_val_bgr,
+        X_val_type,
+        context="test",
+    )
+    setattr(opt, "_test_kept_row_indices", kept_row_indices)
     seq_lengths_val = X_val_sys[:, 2].astype(int)
     X_val_sys = X_val_sys[:, :2]
 
@@ -561,6 +652,7 @@ def test(opt):
     loss_tele_all = []
     efl_est_all = []
     efl_ideal_all = []
+    efl_first_order_all = []
     loss_efl_all = []
     # 如需 chrom / EFL，将来可以从 metrics 里再加
 
@@ -643,6 +735,7 @@ def test(opt):
             loss_tele_all.append(metrics["loss_tele"])
             efl_est_all.append(metrics["EFL_est"])
             efl_ideal_all.append(metrics["EFL_ideal"])
+            efl_first_order_all.append(metrics["EFL_first_order"])
             loss_efl_all.append(metrics["loss_EFL"])
 
             count += 1
@@ -664,6 +757,7 @@ def test(opt):
     loss_tele_all = torch.cat(loss_tele_all, dim=0).view(-1, 1)
     efl_est_all = torch.cat(efl_est_all, dim=0).view(-1, 1)
     efl_ideal_all = torch.cat(efl_ideal_all, dim=0).view(-1, 1)
+    efl_first_order_all = torch.cat(efl_first_order_all, dim=0).view(-1, 1)
     loss_efl_all = torch.cat(loss_efl_all, dim=0).view(-1, 1)
 
     # ================== 写 CSV ==================
@@ -684,6 +778,13 @@ def test(opt):
             efl_est_all,
             efl_ideal_all,
         )
+        save_efl_csv(
+            opt,
+            efl_est_all,
+            efl_first_order_all,
+            efl_ideal_all,
+            loss_efl_all,
+        )
     else:
         print("[Info] save_csv disabled: skipping CSV saving.")
 
@@ -692,6 +793,17 @@ def test(opt):
     out_dir = _output_dir(opt)
     test_csv = os.path.join(out_dir, _with_tag("test_output_metrics_pred.csv", tag))
     test_loss_csv = os.path.join(out_dir, _with_tag("test_output_loss_pred.csv", tag))
+    test_efl_csv = os.path.join(out_dir, _with_tag("test_output_efl.csv", tag))
+    kept_row_indices = getattr(opt, "_test_kept_row_indices", None)
+    if kept_row_indices is not None and len(kept_row_indices) > 0:
+        kept_indices_csv = os.path.join(out_dir, _with_tag("test_input_kept_row_indices.csv", tag))
+        pd.DataFrame({"original_row_idx": kept_row_indices}).to_csv(
+            kept_indices_csv,
+            header=True,
+            index=False,
+            encoding="utf-8",
+        )
+        print(f"[SkipMissingRI:test] kept input row indices saved to: {kept_indices_csv}")
     analysis_csv = test_csv
     analysis_loss_csv = test_loss_csv
     analysis_tag = tag
@@ -709,6 +821,7 @@ def test(opt):
                     test_csv,
                     test_loss_csv,
                     threshold=efl_threshold,
+                    efl_csv=test_efl_csv,
                 )
                 analysis_loss_csv = filtered_loss_csv or test_loss_csv
                 analysis_tag = f"{tag}_eflerror_lt_{_threshold_tag(efl_threshold)}"
@@ -894,7 +1007,7 @@ def save_csv(
     test_output1.to_csv(save_name1, header=None, index=False, encoding="utf-8")
 
 
-def save_efl_csv(opt, efl_est, efl_ideal, loss_efl):
+def save_efl_csv(opt, efl_est, efl_first_order, efl_ideal, loss_efl):
     """
     保存 EFL 相关数据到单独的文件
     efl_est   : 从光线追迹估计的 EFL
@@ -902,12 +1015,12 @@ def save_efl_csv(opt, efl_est, efl_ideal, loss_efl):
     loss_efl  : EFL 损失
     """
     efl_data = torch.cat(
-        (efl_est, efl_ideal, loss_efl),
+        (efl_est, efl_first_order, efl_ideal, loss_efl),
         dim=1,
     )
     
     efl_df = pd.DataFrame(efl_data.cpu().numpy())
-    efl_df.columns = ['EFL_est', 'EFL_ideal', 'loss_EFL']
+    efl_df.columns = ['EFL_est', 'EFL_first_order', 'EFL_ideal', 'loss_EFL']
     
     tag = _rms_filter_tag(opt)
     out_dir = _output_dir(opt)

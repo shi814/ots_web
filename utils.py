@@ -68,6 +68,41 @@ def set_parser():
     parser.add_argument('--save_by_epoch', type=int, default=1000, help='save checkpoints by epoch')
     parser.add_argument('--load_name', type=str, default='', help='load the pre-trained model')
     parser.add_argument('--seed', type=int, default=DEFAULT_SEED, help='random seed')
+    parser.add_argument(
+        "--origin_csv",
+        type=str,
+        default=os.environ.get("SCANLENS_ORIGIN_CSV", "data/surf10_12_edmund_only_val960.csv"),
+        help="CSV used for normalization statistics.",
+    )
+    parser.add_argument(
+        "--train_csv",
+        type=str,
+        default=os.environ.get("SCANLENS_TRAIN_CSV", "data/scan_lens_train_edmund_only_val960.csv"),
+        help="Training split CSV.",
+    )
+    parser.add_argument(
+        "--val_csv",
+        type=str,
+        default=os.environ.get("SCANLENS_VAL_CSV", "data/scan_lens_val_edmund_only_val960.csv"),
+        help="Validation split CSV.",
+    )
+    parser.add_argument(
+        "--material_csv",
+        type=str,
+        default=os.environ.get("SCANLENS_MATERIAL_CSV", "glass/edmund_ots_glass_c_t.csv"),
+        help="OTS material/curvature/thickness library CSV.",
+    )
+    parser.add_argument(
+        "--ri_atol",
+        type=float,
+        default=float(os.environ.get("SCANLENS_RI_ATOL", "1e-5")),
+        help="RI grouping tolerance for matching dataset RI triples to the OTS library.",
+    )
+    parser.add_argument(
+        "--skip_missing_ri",
+        action="store_true",
+        help="Skip whole lens rows whose glass RI triples are not present in material_csv.",
+    )
     # ./log/0729USL/checkpoints/BP_epoch20000_bs2048.pth
 
     # Training parameters
@@ -172,26 +207,38 @@ def set_parser():
         "--enable_efl_first_order_control",
         dest="enable_efl_first_order_control",
         action="store_true",
-        help="Enable first-order (ABCD) EFL consistency control in USL_Loss (default: enabled).",
+        help="Enable trace-vs-first-order EFL consistency control in USL_Loss (default: enabled).",
     )
     efl_fo_group.add_argument(
         "--disable_efl_first_order_control",
         dest="enable_efl_first_order_control",
         action="store_false",
-        help="Disable first-order (ABCD) EFL consistency control and use trace-only EFL loss.",
+        help="Disable trace-vs-first-order EFL consistency control. Only affects --efl_loss_mode abcd.",
     )
     parser.set_defaults(enable_efl_first_order_control=True)
+    parser.add_argument(
+        "--efl_loss_mode",
+        choices=["trace", "abcd"],
+        default="trace",
+        help="Primary EFL loss mode: trace uses EFL_est (legacy); abcd uses first-order ABCD EFL.",
+    )
+    parser.add_argument(
+        "--efl_loss_tolerance",
+        type=float,
+        default=0.1,
+        help="Tolerance subtracted from the primary relative EFL error before EFL loss.",
+    )
     parser.add_argument(
         "--efl_first_order_weight",
         type=float,
         default=0.5,
-        help="Weight for first-order EFL control loss in total loss_EFL.",
+        help="Weight for trace-vs-first-order consistency loss in total loss_EFL.",
     )
     parser.add_argument(
         "--efl_first_order_tolerance",
         type=float,
         default=0.1,
-        help="Tolerance for |EFL_trace-EFL_first_order|/|EFL_first_order| before penalty.",
+        help="Tolerance for |EFL_trace-EFL_first_order|/|EFL_first_order| before consistency penalty.",
     )
 
     # -------------------------
@@ -480,6 +527,7 @@ def infer_loss_metadata(opt):
         "usl_loss_variant",
         "distortion_mode",
         "distortion_ref_angle_deg",
+        "efl_loss_mode",
         "efl_control_mode",
         "efl_first_order_weight",
         "efl_first_order_tolerance",
@@ -500,8 +548,9 @@ def record_parameters(opt):
 
 # 取OTS中，某一种玻璃下的曲率与厚度
 def get_OTS_CT():
-    ri_atol = 1e-6
-    Material_C_data = np.loadtxt('./glass/Material_C_T_Data.csv',delimiter=',', dtype=float)
+    ri_atol = float(os.environ.get("SCANLENS_RI_ATOL", "1e-5"))
+    material_csv = os.environ.get("SCANLENS_MATERIAL_CSV", "./glass/Material_C_T_Data.csv")
+    Material_C_data = np.loadtxt(material_csv,delimiter=',', dtype=float)
     material_array = torch.as_tensor(Material_C_data,dtype=torch.float32, device =device)
     RIs = material_array[:, :3]
 

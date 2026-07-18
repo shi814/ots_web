@@ -42,7 +42,7 @@ USL_METRIC_KEYS = [
     "EFL_ideal",    # ideal EFL from F# * EPD
     "EFL_first_order",   # first-order EFL from ABCD matrix
     "loss_EFL",     # EFL loss
-    "loss_EFL_trace",    # trace-vs-ideal EFL loss
+    "loss_EFL_trace",    # primary EFL loss selected by efl_loss_mode
     "loss_EFL_control",  # trace-vs-first-order control loss
     # 如果以后需要 chromatic，继续往下加
     # "chrom",
@@ -245,18 +245,26 @@ class USL_Loss(nn.Module):
 
     def describe_loss(self):
         variant, cfg = self._loss_config()
+        efl_loss_mode = str(getattr(self.opt, "efl_loss_mode", "trace")).lower()
+        if efl_loss_mode not in {"trace", "abcd"}:
+            efl_loss_mode = "trace"
         efl_ctrl_enabled = bool(getattr(self.opt, "enable_efl_first_order_control", True))
+        if efl_loss_mode == "trace":
+            efl_control_mode = "trace_efl_to_ideal"
+        else:
+            efl_control_mode = (
+                "first_order_abcd_to_ideal+trace_consistency"
+                if efl_ctrl_enabled
+                else "first_order_abcd_to_ideal"
+            )
         metadata = {
             "loss_function": cfg["loss_function"],
             "loss_formula": cfg["loss_formula"],
             "usl_loss_variant": variant,
             "distortion_mode": str(getattr(self.opt, "distortion_mode", "zemax_ftan")),
             "distortion_ref_angle_deg": str(getattr(self.opt, "distortion_ref_angle_deg", 0.01)),
-            "efl_control_mode": (
-                "trace+first_order_abcd"
-                if efl_ctrl_enabled
-                else "trace_only"
-            ),
+            "efl_loss_mode": efl_loss_mode,
+            "efl_control_mode": efl_control_mode,
             "efl_first_order_weight": str(getattr(self.opt, "efl_first_order_weight", 0.5)),
             "efl_first_order_tolerance": str(getattr(self.opt, "efl_first_order_tolerance", 0.1)),
             "loss_filtering": (
@@ -652,13 +660,17 @@ class USL_Loss(nn.Module):
         EFL_est_g = self.EPD / 2 / torch.tan(theta + eps)  # (nLens,)
         EFL_first_order = self._first_order_efl_abcd(lens, surf_lens, mask)
         EFL_ideal = X_data[:, 0] * self.EPD  # 40mm
-        # 主损失：trace EFL 相对 ideal EFL 的偏差
-        efl_error_ratio = torch.abs(EFL_ideal - EFL_est_g) / (EFL_ideal + eps)
+        # Primary EFL source is selected by efl_loss_mode: legacy trace EFL or ABCD EFL.
+        efl_loss_mode = str(getattr(self.opt, "efl_loss_mode", "trace")).lower()
+        if efl_loss_mode not in {"trace", "abcd"}:
+            efl_loss_mode = "trace"
+        efl_primary = EFL_first_order if efl_loss_mode == "abcd" else EFL_est_g
+        efl_error_ratio = torch.abs(efl_primary - EFL_ideal) / (EFL_ideal + eps)
         efl_loss_tolerance = float(getattr(self.opt, "efl_loss_tolerance", 0.1))
         loss_EFL_trace = torch.clamp(efl_error_ratio - efl_loss_tolerance, min=0.0)
 
         # 控制项：trace EFL 与一阶 ABCD EFL 需要一致
-        enable_efl_ctrl = bool(getattr(self.opt, "enable_efl_first_order_control", True))
+        enable_efl_ctrl = bool(getattr(self.opt, "enable_efl_first_order_control", True)) and efl_loss_mode == "abcd"
         ctrl_tol = float(getattr(self.opt, "efl_first_order_tolerance", efl_loss_tolerance))
         ctrl_w = float(getattr(self.opt, "efl_first_order_weight", 0.5))
         efl_ctrl_ratio = torch.abs(EFL_est_g - EFL_first_order) / (torch.abs(EFL_first_order) + eps)
@@ -936,7 +948,11 @@ class USL_Loss(nn.Module):
         enable_efl_filter = getattr(self.opt, "enable_efl_filter", False)
 
         eps = torch.finfo(EFL_ideal.dtype).eps
-        efl_ratio = EFL_est / (EFL_ideal + eps)
+        efl_loss_mode = str(getattr(self.opt, "efl_loss_mode", "trace")).lower()
+        if efl_loss_mode not in {"trace", "abcd"}:
+            efl_loss_mode = "trace"
+        efl_filter_value = EFL_first_order if efl_loss_mode == "abcd" else EFL_est
+        efl_ratio = efl_filter_value / (EFL_ideal + eps)
         efl_deviation = torch.abs(efl_ratio - 1.0)
 
         with torch.no_grad():

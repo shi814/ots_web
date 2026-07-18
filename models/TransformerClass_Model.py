@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import argparse
+import os
 from dataset_norm import convert2real_dataBGR
 import utils
 
@@ -185,7 +186,7 @@ class LensTransformer(nn.Module):
         self.tau_start = 1
         self.tau_end = 0.01
         self.opt = opt
-        self.ri_atol=1e-6
+        self.ri_atol = float(os.environ.get("SCANLENS_RI_ATOL", "1e-5"))
         self.Y_real_max_9 = torch.tensor([43,  60,  35,  48, 46],dtype=torch.float32).to(_DEVICE)
         self.Y_real_min_9 = torch.tensor([10,   0.2,  0.1, 0.2, 1], dtype=torch.float32).to(_DEVICE)
         self.Y_real_max_11 = torch.tensor([85,   50,   33,   48, 32, 32], dtype=torch.float32).to(_DEVICE)
@@ -196,6 +197,10 @@ class LensTransformer(nn.Module):
     def get_group_idx(self, ri_seq):
         ri_keys = torch.round(ri_seq / self.ri_atol).to(torch.long)
         match_g = (ri_keys.unsqueeze(1) == self.uniq_keys.unsqueeze(0)).all(dim=-1)
+        has_match = match_g.any(dim=1)
+        if not bool(has_match.all()):
+            missing = ri_seq[~has_match].detach().cpu().numpy()
+            raise ValueError(f"RI group not found in material library. Missing RI examples: {missing[:5]}")
         return match_g.float().argmax(dim=1)
 
     def _get_tau(self, epoch):
