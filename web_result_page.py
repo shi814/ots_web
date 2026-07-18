@@ -884,13 +884,12 @@ def run_app() -> None:
         return
 
     st.subheader("Target Parameters")
-    st.caption("Suggested range: HFOV 8-10 deg, F# 9-17.5")
     col1, col2 = st.columns(2)
     target_fn = col1.number_input(
-        "Target F#", value=9.75, format="%.6f", help="Suggested range: 9-17.5"
+        "Target F# (suggested: 9-17.5)", value=9.75, format="%.6f", help="Suggested range: 9-17.5"
     )
     target_hfov = col2.number_input(
-        "Target HFOV (deg)", value=8.5, format="%.6f", help="Suggested range: 8-10 deg"
+        "Target HFOV (deg, suggested: 8-10)", value=8.5, format="%.6f", help="Suggested range: 8-10 deg"
     )
 
     if st.button("Generate & Filter Systems", type="primary"):
