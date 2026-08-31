@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import argparse
+import os
 from dataset_norm import convert2real_dataBGR
 import utils
 
@@ -42,7 +43,7 @@ class EmbeddingSeq(nn.Module):
         sys_dim: 系统参数维度
         glss_dim: 每个面折射率参数维度
         hidden_dim: Transformer d_model
-        max_seq_len: 最大面数 (比如 11)
+        max_seq_len: 最大面数 (比如 13)
         """
         super().__init__()
 
@@ -146,6 +147,35 @@ class DynamicGroupClassifier(nn.Module):
 
         return curv_sel, thick_sel
 
+
+class DynamicGroupRegressor(nn.Module):
+    """Continuously regress glass geometry inside each RI group's library range."""
+
+    def __init__(self, d_model, maxK):
+        super().__init__()
+        self.fc_params = nn.Linear(d_model, 3)
+
+    def forward(self, feat, group_idx, group_mask, group_pairs, group_t, tau=0.2, hard=False):
+        del tau, hard
+        raw = torch.sigmoid(self.fc_params(feat))
+        valid = group_mask[group_idx]
+        curv = group_pairs[group_idx]
+        thick = group_t[group_idx]
+
+        inf = torch.full_like(curv, float("inf"))
+        neg_inf = torch.full_like(curv, float("-inf"))
+        curv_min = torch.where(valid.unsqueeze(-1), curv, inf).amin(dim=1)
+        curv_max = torch.where(valid.unsqueeze(-1), curv, neg_inf).amax(dim=1)
+
+        thick_inf = torch.full_like(thick, float("inf"))
+        thick_neg_inf = torch.full_like(thick, float("-inf"))
+        thick_min = torch.where(valid.unsqueeze(-1), thick, thick_inf).amin(dim=1)
+        thick_max = torch.where(valid.unsqueeze(-1), thick, thick_neg_inf).amax(dim=1)
+
+        curv_pred = curv_min + raw[:, :2] * (curv_max - curv_min)
+        thick_pred = thick_min + raw[:, 2:3] * (thick_max - thick_min)
+        return curv_pred, thick_pred
+
 # import
 
 # ===============================================================
@@ -166,17 +196,36 @@ class LensTransformer(nn.Module):
         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
 
         # === Air 面预测保持不变 ===
-        self.heads_A_9 = nn.ModuleList([TFCBlock(opt.input_size, 1) for _ in range(opt.seq1)])
-        self.heads_A_11 = nn.ModuleList([TFCBlock(opt.input_size, 1) for _ in range(opt.seq2)])
+        seq_lengths_raw = getattr(opt, "seq_lengths", "7,9,11,13")
+        self.supported_seq_lengths = tuple(
+            int(x) for x in str(seq_lengths_raw).split(",") if str(x).strip()
+        )
+        self.heads_A_by_len = nn.ModuleDict({
+            str(seq_len): nn.ModuleList([TFCBlock(opt.input_size, 1) for _ in range(seq_len)])
+            for seq_len in self.supported_seq_lengths
+        })
+        self.heads_A_7 = self.heads_A_by_len["7"]
+        self.heads_A_13 = self.heads_A_by_len["13"]
 
-        # === lens替换为分类头 ===
+        # Glass geometry uses either the main classification head or the
+        # bounded continuous-regression ablation head.
         maxK = group_mask.size(1)
-        self.class_heads_G_9 = nn.ModuleList([
-            DynamicGroupClassifier(opt.input_size, maxK=maxK) for _ in range(opt.seq1)
-        ])
-        self.class_heads_G_11 = nn.ModuleList([
-            DynamicGroupClassifier(opt.input_size, maxK=maxK) for _ in range(opt.seq2)
-        ])
+        self.glass_head_mode = str(
+            getattr(opt, "glass_head_mode", "classification")
+        ).lower()
+        glass_head_cls = (
+            DynamicGroupRegressor
+            if self.glass_head_mode == "regression"
+            else DynamicGroupClassifier
+        )
+        self.class_heads_G_by_len = nn.ModuleDict({
+            str(seq_len): nn.ModuleList([
+                glass_head_cls(opt.input_size, maxK=maxK) for _ in range(seq_len)
+            ])
+            for seq_len in self.supported_seq_lengths
+        })
+        self.class_heads_G_7 = self.class_heads_G_by_len["7"]
+        self.class_heads_G_13 = self.class_heads_G_by_len["13"]
 
         self.group_mask, self.group_c, self.group_t, self.uniq_keys=group_mask, group_c, group_t, uniq_keys
         self.max_seq_len = opt.max_seq_length
@@ -185,17 +234,33 @@ class LensTransformer(nn.Module):
         self.tau_start = 1
         self.tau_end = 0.01
         self.opt = opt
-        self.ri_atol=1e-6
-        self.Y_real_max_9 = torch.tensor([43,  60,  35,  48, 46],dtype=torch.float32).to(_DEVICE)
-        self.Y_real_min_9 = torch.tensor([10,   0.2,  0.1, 0.2, 1], dtype=torch.float32).to(_DEVICE)
-        self.Y_real_max_11 = torch.tensor([85,   50,   33,   48, 32, 32], dtype=torch.float32).to(_DEVICE)
-        self.Y_real_min_11 = torch.tensor([10,  0.2,  0.2,   2,  0.2,1], dtype=torch.float32).to(_DEVICE)
+        self.ri_atol = float(os.environ.get("SCANLENS_RI_ATOL", "1e-5"))
+        self.Y_real_max_by_len = {
+            7: torch.tensor([43, 60, 35, 48], dtype=torch.float32).to(_DEVICE),
+            9: torch.tensor([41, 13, 13, 13, 7], dtype=torch.float32).to(_DEVICE),
+            11: torch.tensor([44, 13, 8, 13, 9, 57], dtype=torch.float32).to(_DEVICE),
+            13: torch.tensor([85, 50, 33, 48, 32, 32, 32], dtype=torch.float32).to(_DEVICE),
+        }
+        self.Y_real_min_by_len = {
+            7: torch.tensor([10, 0.2, 0.1, 0.2], dtype=torch.float32).to(_DEVICE),
+            9: torch.tensor([15, 1, 0.2, 1, 0.1], dtype=torch.float32).to(_DEVICE),
+            11: torch.tensor([39, 1, 0.2, 1, 0.2, 49], dtype=torch.float32).to(_DEVICE),
+            13: torch.tensor([10, 0.2, 0.2, 2, 0.2, 1, 0.2], dtype=torch.float32).to(_DEVICE),
+        }
+        self.Y_real_max_7 = self.Y_real_max_by_len[7]
+        self.Y_real_min_7 = self.Y_real_min_by_len[7]
+        self.Y_real_max_13 = self.Y_real_max_by_len[13]
+        self.Y_real_min_13 = self.Y_real_min_by_len[13]
         #现在zemax里优化，确定距离限制（物理意义）
 
     # ===== 根据 RI 找库组索引 =====
     def get_group_idx(self, ri_seq):
         ri_keys = torch.round(ri_seq / self.ri_atol).to(torch.long)
         match_g = (ri_keys.unsqueeze(1) == self.uniq_keys.unsqueeze(0)).all(dim=-1)
+        has_match = match_g.any(dim=1)
+        if not bool(has_match.all()):
+            missing = ri_seq[~has_match].detach().cpu().numpy()
+            raise ValueError(f"RI group not found in material library. Missing RI examples: {missing[:5]}")
         return match_g.float().argmax(dim=1)
 
     def _get_tau(self, epoch):
@@ -220,6 +285,79 @@ class LensTransformer(nn.Module):
 
         else:  # 阶段3：保持低温，接近hard
             return self.tau_end  # 通常设成 0.01
+
+    def _forward_one_length(
+        self,
+        x,
+        bgr_seq,
+        type_seq,
+        seq_length,
+        outputs,
+        cur_len,
+        tau,
+        hard,
+        air_base_ct=None,
+        air_delta_scale_mm=10.0,
+    ):
+        idx = seq_length == cur_len
+        if not idx.any():
+            return
+
+        x_cur = x[idx, :cur_len, :]
+        type_cur = type_seq[idx, :cur_len]
+        surf_cur = bgr_seq[idx, :cur_len]
+        heads_A = self.heads_A_by_len[str(cur_len)]
+        class_heads_G = self.class_heads_G_by_len[str(cur_len)]
+        y_real_max = self.Y_real_max_by_len[cur_len]
+        y_real_min = self.Y_real_min_by_len[cur_len]
+        outs = []
+        a_idx = 0
+
+        for i in range(cur_len):
+            feat = x_cur[:, i, :]
+            mask_A = type_cur[:, i] == 0
+            mask_G = type_cur[:, i] == 1
+            out_i = []
+
+            if mask_A.any():
+                pred_A = heads_A[i](feat[mask_A])
+                if a_idx < len(y_real_max):
+                    t_min = y_real_min[a_idx]
+                    t_max = y_real_max[a_idx]
+                else:
+                    t_min = y_real_min[-1]
+                    t_max = y_real_max[-1]
+
+                t_range = t_max - t_min
+                if air_base_ct is not None:
+                    base_t = air_base_ct[idx, i, 1:2][mask_A]
+                    delta_mm = air_delta_scale_mm * torch.tanh(pred_A / air_delta_scale_mm)
+                    pred_A = torch.clamp(base_t + delta_mm, min=t_min, max=t_max)
+                else:
+                    pred_A = _convert2real_t(pred_A, t_min, t_range)
+
+                out_i.append(pred_A)
+                a_idx += 1
+
+            if mask_G.any():
+                feat_G = feat[mask_G]
+                ri_G = surf_cur[:, i, :][mask_G]
+                group_idx = self.get_group_idx(ri_G)
+                curv_sel, thick_sel = class_heads_G[i](
+                    feat_G, group_idx,
+                    self.group_mask, self.group_c, self.group_t, tau, hard
+                )
+                pred_G = torch.cat([curv_sel[:, 0:1], thick_sel, curv_sel[:, 1:2]], dim=1)
+                out_i.append(pred_G)
+
+            outs.append(out_i)
+
+        outs = [t for sub in outs for t in sub]
+        outs = torch.cat(outs, dim=1)
+        curv_zero = torch.zeros_like(outs[:, 0:1])
+        outs = torch.cat((curv_zero, outs), dim=1)
+        outs = outs.view(outs.shape[0], cur_len, self.output_size - 1)
+        outputs[idx, :cur_len, :] = outs
 
     # ==========================================================
     # forward
@@ -255,140 +393,141 @@ class LensTransformer(nn.Module):
         maxK = self.group_mask.size(1)
         tau = self._get_tau(epoch)
 
-        # === 9 面系统 ===
-        idx9 = (seq_length == 9)
-        if idx9.any():
-            x9 = x[idx9, :9, :]
-            type9 = type_seq[idx9, :9]
-            surf9 = bgr_seq[idx9, :9]
-            b_idx = idx9.nonzero(as_tuple=True)[0]
-            outs9 = []
-            a_idx =0
-            for i in range(9):
-                feat = x9[:, i, :]
-                mask_A = type9[:, i] == 0
-                mask_G = type9[:, i] == 1
-                out_i = []
+        for cur_len in (9, 11):
+            self._forward_one_length(
+                x,
+                bgr_seq,
+                type_seq,
+                seq_length,
+                outputs,
+                cur_len,
+                tau,
+                hard,
+                air_base_ct=air_base_ct,
+                air_delta_scale_mm=air_delta_scale_mm,
+            )
 
-                if mask_A.any():
-                    pred_A = self.heads_A_9[i](feat[mask_A])
-                    # ✅ 根据当前空气间隔编号选取范围
-                    if a_idx < len(self.Y_real_max_9):
-                        t_min = self.Y_real_min_9[a_idx]
-                        t_max = self.Y_real_max_9[a_idx]
-                    else:
-                        # 若超出范围，默认最后一个
-                        t_min = self.Y_real_min_9[-1]
-                        t_max = self.Y_real_max_9[-1]
-
-                    t_range9 = t_max - t_min
-                    if air_base_ct is not None:
-                        base_t = air_base_ct[idx9, i, 1:2][mask_A]
-                        delta_mm = air_delta_scale_mm * torch.tanh(pred_A / air_delta_scale_mm)
-                        pred_A = torch.clamp(base_t + delta_mm, min=t_min, max=t_max)
-                    else:
-                        # pred_A = F.softplus(pred_A)
-                        # pred_A = t_min + t_range9 * torch.sigmoid(pred_A)
-                        pred_A = _convert2real_t(pred_A, t_min, t_range9)
-
-                    out_i.append(pred_A)
-                    a_idx += 1  # ✅ 下一个空气面再取下一组范
-
-                if mask_G.any():
-                    feat_G = feat[mask_G]
-                    ri_G = surf9[:, i, :][mask_G]
-                    group_idx = self.get_group_idx(ri_G)
-                    curv_sel, thick_sel = self.class_heads_G_9[i](
-                        feat_G, group_idx,
-                        self.group_mask, self.group_c, self.group_t, tau,hard
-                    )
-                    pred_G = torch.cat([curv_sel[:, 0:1], thick_sel, curv_sel[:, 1:2]], dim=1)
-                    out_i.append(pred_G)
-
-                outs9.append(out_i)
-            outs9 = [t for sub in outs9 for t in sub]
-            outs9 = torch.cat(outs9, dim=1)  # [N9, 9, out_dim]
-            curv_zero = torch.zeros_like(outs9[:, 0:1])
-            outs9 = torch.cat((curv_zero, outs9), dim=1)  # [N9, 9, out_dim]
-            outs9 = outs9.view(outs9.shape[0], 9, self.output_size - 1)  # [256,9,2]
-            outputs[idx9, :9, :] = outs9
-
-        # === 11 面系统 ===
-        idx11 = (seq_length == 11)
-        if idx11.any():
-            x11 = x[idx11, :11, :]
-            type11 = type_seq[idx11, :11]
-            surf11 = bgr_seq[idx11, :11]
-            b_idx = idx11.nonzero(as_tuple=True)[0]
-            outs11 = []
+        # === 7 / 13 面系统 ===
+        idx7 = (seq_length == 7)
+        if idx7.any():
+            x7 = x[idx7, :7, :]
+            type7 = type_seq[idx7, :7]
+            surf7 = bgr_seq[idx7, :7]
+            outs7 = []
             a_idx = 0
-            for i in range(11):
-                feat = x11[:, i, :]
-                mask_A = type11[:, i] == 0
-                mask_G = type11[:, i] == 1
+            for i in range(7):
+                feat = x7[:, i, :]
+                mask_A = type7[:, i] == 0
+                mask_G = type7[:, i] == 1
                 out_i = []
 
                 if mask_A.any():
-                    pred_A = self.heads_A_11[i](feat[mask_A])
-                    # ✅ 根据当前空气间隔编号选取范围
-                    if a_idx < len(self.Y_real_max_11):
-                        t_min = self.Y_real_min_11[a_idx]
-                        t_max = self.Y_real_max_11[a_idx]
+                    pred_A = self.heads_A_7[i](feat[mask_A])
+                    if a_idx < len(self.Y_real_max_7):
+                        t_min = self.Y_real_min_7[a_idx]
+                        t_max = self.Y_real_max_7[a_idx]
                     else:
-                        # 若超出范围，默认最后一个
-                        t_min = self.Y_real_min_11[-1]
-                        t_max = self.Y_real_max_11[-1]
+                        t_min = self.Y_real_min_7[-1]
+                        t_max = self.Y_real_max_7[-1]
 
-                    t_range11 = t_max - t_min
+                    t_range7 = t_max - t_min
                     if air_base_ct is not None:
-                        base_t = air_base_ct[idx11, i, 1:2][mask_A]
+                        base_t = air_base_ct[idx7, i, 1:2][mask_A]
                         delta_mm = air_delta_scale_mm * torch.tanh(pred_A / air_delta_scale_mm)
                         pred_A = torch.clamp(base_t + delta_mm, min=t_min, max=t_max)
                     else:
-                        # pred_A = F.softplus(pred_A)
-                        # pred_A = t_min + t_range11 * torch.sigmoid(pred_A)
-                        pred_A = _convert2real_t(pred_A, t_min, t_range11)
+                        pred_A = _convert2real_t(pred_A, t_min, t_range7)
+
                     out_i.append(pred_A)
-                    a_idx += 1  # ✅ 下一个空气面再取下一组范围
+                    a_idx += 1
 
                 if mask_G.any():
                     feat_G = feat[mask_G]
-                    ri_G = surf11[:, i, :][mask_G]
+                    ri_G = surf7[:, i, :][mask_G]
                     group_idx = self.get_group_idx(ri_G)
-                    curv_sel, thick_sel = self.class_heads_G_11[i](
+                    curv_sel, thick_sel = self.class_heads_G_7[i](
                         feat_G, group_idx,
-                        self.group_mask, self.group_c, self.group_t, tau,hard
+                        self.group_mask, self.group_c, self.group_t, tau, hard
+                    )
+                    pred_G = torch.cat([curv_sel[:, 0:1], thick_sel, curv_sel[:, 1:2]], dim=1)
+                    out_i.append(pred_G)
+
+                outs7.append(out_i)
+            outs7 = [t for sub in outs7 for t in sub]
+            outs7 = torch.cat(outs7, dim=1)
+            curv_zero = torch.zeros_like(outs7[:, 0:1])
+            outs7 = torch.cat((curv_zero, outs7), dim=1)
+            outs7 = outs7.view(outs7.shape[0], 7, self.output_size - 1)
+            outputs[idx7, :7, :] = outs7
+
+        idx13 = (seq_length == 13)
+        if idx13.any():
+            x13 = x[idx13, :13, :]
+            type13 = type_seq[idx13, :13]
+            surf13 = bgr_seq[idx13, :13]
+            outs13 = []
+            a_idx = 0
+            for i in range(13):
+                feat = x13[:, i, :]
+                mask_A = type13[:, i] == 0
+                mask_G = type13[:, i] == 1
+                out_i = []
+
+                if mask_A.any():
+                    pred_A = self.heads_A_13[i](feat[mask_A])
+                    if a_idx < len(self.Y_real_max_13):
+                        t_min = self.Y_real_min_13[a_idx]
+                        t_max = self.Y_real_max_13[a_idx]
+                    else:
+                        t_min = self.Y_real_min_13[-1]
+                        t_max = self.Y_real_max_13[-1]
+
+                    t_range13 = t_max - t_min
+                    if air_base_ct is not None:
+                        base_t = air_base_ct[idx13, i, 1:2][mask_A]
+                        delta_mm = air_delta_scale_mm * torch.tanh(pred_A / air_delta_scale_mm)
+                        pred_A = torch.clamp(base_t + delta_mm, min=t_min, max=t_max)
+                    else:
+                        pred_A = _convert2real_t(pred_A, t_min, t_range13)
+                    out_i.append(pred_A)
+                    a_idx += 1
+
+                if mask_G.any():
+                    feat_G = feat[mask_G]
+                    ri_G = surf13[:, i, :][mask_G]
+                    group_idx = self.get_group_idx(ri_G)
+                    curv_sel, thick_sel = self.class_heads_G_13[i](
+                        feat_G, group_idx,
+                        self.group_mask, self.group_c, self.group_t, tau, hard
                     )
                     pred_G = torch.cat([curv_sel[:, 0:1], thick_sel, curv_sel[:, 1:2]], dim=1)
 
                     out_i.append(pred_G)
-                    # outputs[idx11, :11, :][mask_G] = pred_G
-                outs11.append(out_i)
-            outs11 = [t for sub in outs11 for t in sub]
-            outs11 = torch.cat(outs11, dim=1)  # [N9, 9, out_dim]
-            curv_zero = torch.zeros_like(outs11[:, 0:1])
-            outs11 = torch.cat((curv_zero, outs11), dim=1)  # [N9, 9, out_dim]
-            outs11 = outs11.view(outs11.shape[0], 11, self.output_size - 1)  # [256,9,2]
-            outputs[idx11, :11, :] = outs11
-
+                outs13.append(out_i)
+            outs13 = [t for sub in outs13 for t in sub]
+            outs13 = torch.cat(outs13, dim=1)
+            curv_zero = torch.zeros_like(outs13[:, 0:1])
+            outs13 = torch.cat((curv_zero, outs13), dim=1)
+            outs13 = outs13.view(outs13.shape[0], 13, self.output_size - 1)
+            outputs[idx13, :13, :] = outs13
 
         return outputs, padding_mask
 
 if __name__ == "__main__":
     # 构造混合 batch（2个系统：一个9面，一个11面）
     B = 2
-    max_seq_len = 11
-    seq_lengths = torch.tensor([9, 11]).cuda()
+    max_seq_len = 13
+    seq_lengths = torch.tensor([7, 13]).cuda()
 
     sys_params = torch.randn(B, 3).cuda()
     surf_seq = torch.randn(B, max_seq_len, 3).cuda()
     type_seq = torch.randint(0, 2, (B, max_seq_len)).cuda()
 
-    opt = argparse.Namespace(sys_dim=3, nWL=3, input_size=128, hidden_size=256, max_seq_length=11, output_size=4,num_heads=8,num_layers=6)
+    opt = argparse.Namespace(sys_dim=3, nWL=3, input_size=128, hidden_size=256, max_seq_length=13, output_size=4,num_heads=8,num_layers=6, seq1=7, seq2=13)
 
-    group_mask, group_c, group_t= utils.get_OTS_CT()
-    model = LensTransformer(opt, group_mask,group_c,group_t).cuda()
+    group_mask, group_c, group_t, uniq_keys = utils.get_OTS_CT()
+    model = LensTransformer(opt, group_mask, group_c, group_t, uniq_keys).cuda()
     out, mask = model(sys_params, surf_seq, type_seq, seq_lengths)
-    print(out.shape)  # [2, 11, 3]
+    print(out.shape)  # [2, 13, 3]
 
 

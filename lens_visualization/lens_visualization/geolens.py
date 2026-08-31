@@ -1755,7 +1755,12 @@ class GeoLens(Lens, GeoLensEval, GeoLensVis, GeoLensIO):
         Returns:
             torch.Tensor: Intersection points. Shape: [N*(N-1)/2, 2]
         """
+        finite = torch.isfinite(origins).all(dim=-1) & torch.isfinite(directions).all(dim=-1)
+        origins = origins[finite]
+        directions = directions[finite]
         N = origins.shape[0]
+        if N < 2:
+            return origins.new_zeros((0, 2))
 
         # Create pairwise combinations of indices
         idx = torch.arange(N)
@@ -1766,32 +1771,16 @@ class GeoLens(Lens, GeoLensEval, GeoLensVis, GeoLensIO):
         Di = directions[idx_i]  # Shape: [N*(N-1)/2, 2]
         Dj = directions[idx_j]  # Shape: [N*(N-1)/2, 2]
 
-        # Vector from Oi to Oj
-        b = Oj - Oi  # Shape: [N*(N-1)/2, 2]
-
-        # Coefficients matrix A
-        A = torch.stack([Di, -Dj], dim=-1)  # Shape: [N*(N-1)/2, 2, 2]
-
-        # Solve the linear system Ax = b
-        # Using least squares to handle the case of no exact solution
-        if A.device.type == "mps":
-            # Perform lstsq on CPU for MPS devices and move result back
-            x, _ = torch.linalg.lstsq(A.cpu(), b.unsqueeze(-1).cpu())[:2]
-            x = x.to(A.device)
-        else:
-            x, _ = torch.linalg.lstsq(A, b.unsqueeze(-1))[:2]
-        x = x.squeeze(-1)  # Shape: [N*(N-1)/2, 2]
-        s = x[:, 0]
-        t = x[:, 1]
-
-        # Calculate the intersection points using either rays
-        P_i = Oi + s.unsqueeze(-1) * Di  # Shape: [N*(N-1)/2, 2]
-        P_j = Oj + t.unsqueeze(-1) * Dj  # Shape: [N*(N-1)/2, 2]
-
-        # Take the average to mitigate numerical precision issues
-        P = (P_i + P_j) / 2
-
-        return P
+        # Analytic 2-D line intersection avoids batched LAPACK failures for
+        # empty, parallel, or numerically degenerate ray pairs.
+        delta = Oj - Oi
+        det = Di[:, 0] * Dj[:, 1] - Di[:, 1] * Dj[:, 0]
+        valid = torch.isfinite(det) & (det.abs() > 1e-10)
+        if not bool(valid.any()):
+            return origins.new_zeros((0, 2))
+        s = (delta[:, 0] * Dj[:, 1] - delta[:, 1] * Dj[:, 0]) / det
+        points = Oi + s.unsqueeze(-1) * Di
+        return points[valid & torch.isfinite(points).all(dim=-1)]
 
     # ====================================================================================
     # Lens operation

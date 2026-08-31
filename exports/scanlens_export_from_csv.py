@@ -27,8 +27,6 @@
   - JSON文件：包含完整的镜头参数信息
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import math
@@ -41,7 +39,16 @@ try:
     # When imported as a package module: `from exports.scanlens_export_from_csv import ...`
     from .lens_export_utils import LensExporter
 except Exception:  # pragma: no cover
-    # When run as a script from repo root: `python exports/scanlens_export_from_csv.py`
+    # Robust fallback for when this module is re-executed outside a clean
+    # package context. This happens on Streamlit reruns (Python 3.14 can leave
+    # a stale ``None`` at ``sys.modules['exports.lens_export_utils']`` after an
+    # interrupted relative import) and when running the file as a script. We
+    # drop the stale marker and make ``exports/`` importable as a top level dir
+    # so ``import lens_export_utils`` always succeeds.
+    _EXPORTS_DIR = os.path.dirname(os.path.abspath(__file__))
+    if _EXPORTS_DIR not in sys.path:
+        sys.path.insert(0, _EXPORTS_DIR)
+    sys.modules.pop("lens_export_utils", None)
     from lens_export_utils import LensExporter
 
 
@@ -53,13 +60,13 @@ DEFAULT_EXPORT_CONFIG = {
     "csv": r"log/260120/stage1/stage_1.0/train_output_metrics_pred_rmsfilter_on.csv",
     "row": 2,  # 0-based row index, 第3行 = row 2
     # Sequence length:
-    # - 0 / None: auto infer from row content (recommended for mixed 9/11 CSV)
-    # - 9 or 11 : force
+    # - 0 / None: auto infer from row content (recommended for mixed 7/13 CSV)
+    # - 7 or 13 : force
     "n_surf": 0,
     # pred-only: CT column offset.
     # IMPORTANT: in this repo's pred CSV, it's typically:
-    #   - n_surf=9  -> offset_ct=6
-    #   - n_surf=11 -> offset_ct=0  (the first CT pair is usually STOP: (0, ~39mm))
+    #   - n_surf=7  -> offset_ct=18
+    #   - n_surf=13 -> offset_ct=0  (the first CT pair is usually STOP: (0, ~39mm))
     # Set to None to auto-infer from n_surf.
     "offset_ct": None,
     # orig-only: treat CT[:,0] as radius and convert to curvature
@@ -131,41 +138,37 @@ def _read_pred_row_from_vals(
 
 def _infer_pred_nsurf_and_offset(vals: Sequence[float], tol: float = 1e-10) -> Tuple[int, int]:
     """
-    Auto-infer whether a mixed pred CSV row is a 9-surf or 11-surf system.
+    Auto-infer whether a mixed pred CSV row is a 7/9/11/13-surf system.
 
     Heuristic used in this repo:
-    - Mixed pred CSV often stores max-11 N_bgr and max-11 CT, with 9-surf samples padded by zeros
-      on the last 2 surfaces (both N_bgr and CT).
-    - If both the last-2-surface N_bgr and the last-2-surface CT are (near) zero -> treat as 9.
+    - Mixed pred CSV stores max-13 N_bgr and max-13 CT, with shorter samples padded by zeros.
 
-    Returns: (n_surf, offset_ct) where offset_ct is 6 for 9-surf, 0 for 11-surf.
+    Returns: (n_surf, offset_ct), where offset_ct is the padded N_bgr tail width.
     """
-    # Indices for a max-11 layout
-    max_n = 11
+    # Indices for a max-13 layout
+    max_n = 13
     y0 = 2
     y1 = y0 + 3 * max_n  # 2 + 33 = 35
     ct0 = y1             # 35
     ct1 = ct0 + 2 * max_n  # 35 + 22 = 57
 
-    # If row is too short for the max-11 blocks, fall back to a safe guess:
-    # try 9-surf first (it needs fewer columns), otherwise 11-surf.
+    # If row is too short for the max-13 blocks, fall back to a safe guess.
     if len(vals) < ct1:
-        if len(vals) >= 2 + 5 * 9 + 6:  # minimal for (9, offset=6)
-            return 9, 6
-        if len(vals) >= 2 + 5 * 9:      # minimal for (9, offset=0)
-            return 9, 0
-        return 11, 0
-
-    # Last 2 surfaces in N_bgr (surface idx 9,10; 0-based)
-    y_pad = vals[y0 + 3 * 9: y1]  # 6 numbers
-    # Last 2 surfaces in CT (4 numbers)
-    ct_pad = vals[ct0 + 2 * 9: ct1]
+        for n_surf in (7, 9, 11, 13):
+            offset_ct = (max_n - n_surf) * 3 if n_surf < max_n else 0
+            if len(vals) >= 2 + 5 * n_surf + offset_ct:
+                return n_surf, offset_ct
+        return 13, 0
 
     def _all_near_zero(seq: Sequence[float]) -> bool:
         return all(abs(float(x)) <= tol for x in seq)
 
-    is_9 = _all_near_zero(y_pad) and _all_near_zero(ct_pad)
-    return (9, 6) if is_9 else (11, 0)
+    for n_surf in (7, 9, 11):
+        y_pad = vals[y0 + 3 * n_surf: y1]
+        ct_pad = vals[ct0 + 2 * n_surf: ct1]
+        if _all_near_zero(y_pad) and _all_near_zero(ct_pad):
+            return n_surf, (max_n - n_surf) * 3
+    return 13, 0
 
 
 def _read_glass_names_for_row(glass_matching_csv: str, original_row_idx: int) -> dict:
@@ -363,7 +366,7 @@ def build_scanlens_from_row(
     d = 0.0
     surfaces: List[ScanLensSurface] = []
     # Heuristic: detect STOP as the first surface when it is a plane (curv==0) and medium is air.
-    # This matches the 11-seq pred CSV in this repo where CT[0] is often (0, ~39mm).
+    # This matches the 13-seq pred CSV in this repo where CT[0] is often (0, ~39mm).
     stop_detected = (
         len(ct) > 0
         and abs(float(ct[0][0])) < 1e-12
@@ -437,18 +440,18 @@ def export_from_config(cfg: dict) -> Tuple[str, str]:
         # Load row once; enables auto-infer without re-reading CSV multiple times.
         vals = _read_csv_row_as_floats(csv_path, row)
 
-        # Auto infer n_surf (9 vs 11) when n_surf <= 0.
+        # Auto infer n_surf (7 vs 13) when n_surf <= 0.
         inferred = False
         if n_surf <= 0:
             n_surf, inferred_offset = _infer_pred_nsurf_and_offset(vals)
             offset_ct = inferred_offset if (offset_ct_raw is None) else int(offset_ct_raw)
             inferred = True
         else:
-            # pred: allow None -> auto infer (important for 11-seq where offset_ct must be 0)
+            # pred: allow None -> auto infer (important for 13-seq where offset_ct must be 0)
             if offset_ct_raw is None:
-                if n_surf == 9:
-                    offset_ct = 6
-                elif n_surf == 11:
+                if n_surf in (7, 9, 11):
+                    offset_ct = (13 - n_surf) * 3
+                elif n_surf == 13:
                     offset_ct = 0
                 else:
                     raise ValueError(
@@ -462,7 +465,7 @@ def export_from_config(cfg: dict) -> Tuple[str, str]:
         (fn, hfov), n_bgr, ct = _read_pred_row_from_vals(vals, n_surf=n_surf, offset_ct=offset_ct)
     else:
         if n_surf <= 0:
-            raise ValueError("orig format requires n_surf to be explicitly set (e.g. 9 or 11).")
+            raise ValueError("orig format requires n_surf to be explicitly set (e.g. 7 or 13).")
         (fn, hfov), n_bgr, ct = read_orig_row(csv_path, n_surf, row)
 
     # FIXED: CSV col 1 is HALF field angle in degrees
@@ -506,7 +509,7 @@ def main():
     ap.add_argument("--format", choices=["pred", "orig"], required=True, help="CSV format kind")
     ap.add_argument("--csv", required=True, help="CSV file path")
     ap.add_argument("--row", type=int, required=True, help="0-based row index")
-    ap.add_argument("--n_surf", type=int, default=0, help="sequence length (9/11). Use 0 to auto-infer (pred only)")
+    ap.add_argument("--n_surf", type=int, default=0, help="sequence length (7/13). Use 0 to auto-infer (pred only)")
     ap.add_argument("--offset_ct", type=int, default=-1, help="pred-only: CT column offset. Use -1 to auto (recommended)")
     ap.add_argument("--ct_is_radius", action="store_true", help="treat CT[:,0] as radius and convert to curvature (orig datasets often need this)")
     ap.add_argument("--epd", type=float, default=4.0, help="Entrance pupil diameter (mm)")

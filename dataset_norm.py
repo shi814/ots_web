@@ -17,10 +17,10 @@ from sklearn.model_selection import train_test_split, KFold
 
 _ORIGIN_DATA_CACHE = None
 
-ORIGIN_DATA_PATH = os.environ.get("SCANLENS_ORIGIN_CSV", "./data/surf10_12_ul_1104.csv")
-TRAIN_DATA_PATH = os.environ.get("SCANLENS_TRAIN_CSV", "./data/scan_lens_train_ul_20260512.csv")
-VAL_DATA_PATH = os.environ.get("SCANLENS_VAL_CSV", "./data/scan_lens_val_ul_20260512.csv")
-TEST_DATA_PATH = os.environ.get("SCANLENS_TEST_CSV", "./data/scan_lens_test_ul_20260512.csv")
+ORIGIN_DATA_PATH = os.environ.get("SCANLENS_ORIGIN_CSV", "./data/surf7_13_ul_0804.csv")
+TRAIN_DATA_PATH = os.environ.get("SCANLENS_TRAIN_CSV", "./data/scan_lens_train_3_6_ul_0804.csv")
+VAL_DATA_PATH = os.environ.get("SCANLENS_VAL_CSV", "./data/scan_lens_val_3_6_ul_0804.csv")
+TEST_DATA_PATH = os.environ.get("SCANLENS_TEST_CSV", "./data/scan_lens_test_3_6_ul_0804.csv")
 
 
 def load_origin_data():
@@ -34,8 +34,8 @@ def _load_split_data(csv_path):
     if data.ndim == 1:
         data = data.reshape(1, -1)
     X_sys = data[:, :3]
-    X_bgr = data[:, 3:3*11+3]
-    X_type = data[:, 3*11+3:]
+    X_bgr = data[:, 3:3*13+3]
+    X_type = data[:, 3*13+3:]
     X_sys = normalize_dataSys(X_sys)
     X_bgr = normalize_dataBGR(X_bgr)
     return X_sys, X_bgr, X_type
@@ -80,7 +80,7 @@ def normalize_dataBGR(data,LB=0, UB=1):
     """
     origin_data = load_origin_data()  # TODO:应在全部数据下归一化
     # origin_data = torch.tensor(origin_data[:,:11], dtype=torch.float32).cuda()
-    origin_data = origin_data[:, 3:3*11+3]
+    origin_data = origin_data[:, 3:3*13+3]
     data_min= np.min(origin_data, axis=0)
     data_max= np.max(origin_data, axis=0)
     denom = (data_max - data_min).reshape(1,-1)
@@ -121,7 +121,7 @@ def convert2real_dataBGR(X_norm, LB=0, UB=1):
     """
     origin_data = load_origin_data()  # TODO:应在全部数据下归一化
     origin_data = torch.as_tensor(origin_data, dtype=torch.float32, device=X_norm.device)
-    origin_data = origin_data[:, 3:3*11+3]
+    origin_data = origin_data[:, 3:3*13+3]
     X_real_min, index = torch.min(origin_data, dim=0)
     X_real_max, index = torch.max(origin_data, dim=0)
     # 全常数列掩码

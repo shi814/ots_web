@@ -26,31 +26,38 @@ DEFAULT_EXPORT_EPD = 4.5
 AIRGAP_CKPT = (
     PROJECT_ROOT
     / "log"
-    / "260521_1013"
+    / "3_to_6"
+    / "two_stage_full_6720_1440_9p75_17p5_0824_oldots"
     / "stage_2"
     / "airgap_unsupervised"
     / "checkpoints"
-    / "AirGapUnsupervised_final.pth"
+    / "AirGapUnsupervised_epoch5000.pth"
 )
+STAGE1_CKPT = (
+    PROJECT_ROOT
+    / "log"
+    / "3_to_6"
+    / "two_stage_full_6720_1440_9p75_17p5_0824_oldots"
+    / "stage_1.0"
+    / "checkpoints"
+    / "SLT_rmsfilter_on_epoch5000_bs512.pth"
+)
+AIRGAP_PARAMS = AIRGAP_CKPT.parent.parent / "parameters_airgap_unsupervised.txt"
 
-# Material catalog sources for generating refractive-index arrangements.
-GT_SURF10_CSV = PROJECT_ROOT / "data" / "scan_lens_dataset_surf10_reorder.csv"
-GT_SURF12_CSV = PROJECT_ROOT / "data" / "scan_lens_dataset_surf12_reorder.csv"
-OTS_GLASS_CSV = PROJECT_ROOT / "glass" / "ots_glass_c.csv"
+# Paper-fixed experiment assets.
+ORIGIN_CSV = PROJECT_ROOT / "data" / "surf7_9_11_13_3_6_plus_4_5_full_6720_1440_9p75_17p5_0824_oldots.csv"
+MATERIAL_CSV = PROJECT_ROOT / "glass" / "Material_C_T_Data_3_6_plus_4_5_5ri_9p75_17p5.csv"
 
-# Test-set layout constants (raw split layout: [fn, hfov, seq_len, 33 index, 11 type]).
-MAX_SURF = 11          # padded face count
-N_WL = 3               # refractive index values per face (B/G/R)
-N_INDEX = MAX_SURF * N_WL  # 33
+# Test-set layout constants (raw split layout: [fn, hfov, seq_len, 39 index, 13 type]).
+MAX_SURF = 13
+N_WL = 3
+N_INDEX = MAX_SURF * N_WL
 
-# Air / Glass alternating patterns (mirrors data_process/Generate_USL_dataset.py).
-PATTERN_SURF10 = ["A", "G", "A", "G", "A", "G", "A", "G", "A", "A"]  # -> 9 usable faces
-PATTERN_SURF12 = ["A", "G", "A", "G", "A", "G", "A", "G", "A", "G", "A", "A"]  # -> 11 usable faces
+SUPPORTED_SEQ_LENGTHS = (7, 9, 11, 13)
 
 # How many arrangements to generate for the requested (F#, HFOV).
-NUM_SURF10 = 100
-NUM_SURF12 = 100
-NUM_ARRANGEMENTS = NUM_SURF10 + NUM_SURF12  # 200
+NUM_PER_SEQ_LENGTH = 50
+NUM_ARRANGEMENTS = NUM_PER_SEQ_LENGTH * len(SUPPORTED_SEQ_LENGTHS)
 GEN_SEED = 42
 
 # Number of best (lowest-RMS, spec-passing) systems to present.
@@ -84,25 +91,9 @@ def infer_efl_sidecar_csv(metrics_csv: Path) -> Path | None:
 # 1) Generate a 200-arrangement raw test set for the requested (F#, HFOV).
 # ---------------------------------------------------------------------------
 def _load_material_catalog() -> np.ndarray:
-    """Build the unique refractive-index triplet catalog.
-
-    Mirrors data_process/Generate_USL_dataset.py: unique triplets from the
-    surf10/surf12 GT libraries merged with the OTS glass catalog.
-    """
-    surf10 = np.loadtxt(GT_SURF10_CSV, delimiter=",", dtype=float)
-    surf12 = np.loadtxt(GT_SURF12_CSV, delimiter=",", dtype=float)
-    ots = np.loadtxt(OTS_GLASS_CSV, delimiter=",", dtype=float)
-
-    mat10 = surf10[:, 3:3 + 10 * 3].reshape(-1, 3)
-    mat12 = surf12[:, 3:3 + 12 * 3].reshape(-1, 3)
-    global_uniq = np.unique(np.vstack([np.unique(mat12, axis=0), np.unique(mat10, axis=0)]), axis=0)
-    # Drop the degenerate row (matches the reference generator).
-    if global_uniq.shape[0] > 3:
-        global_uniq = np.delete(global_uniq, 3, axis=0)
-
-    ots_glass = np.asarray(ots[:, :3], dtype=np.float64)
-    catalog = np.unique(np.concatenate([global_uniq, ots_glass], axis=0), axis=0)
-    return catalog
+    """Load exactly the refractive-index groups used by the paper model."""
+    material = np.loadtxt(MATERIAL_CSV, delimiter=",", dtype=float)
+    return np.unique(np.asarray(material[:, :3], dtype=np.float64), axis=0)
 
 
 def _generate_combos(catalog: np.ndarray, pattern: list[str], num_samples: int, seed: int) -> np.ndarray:
@@ -135,25 +126,29 @@ def generate_arrangement_csv(
     target_hfov: float,
     out_csv: Path,
     *,
-    num_surf10: int = NUM_SURF10,
-    num_surf12: int = NUM_SURF12,
+    num_per_seq_length: int = NUM_PER_SEQ_LENGTH,
     seed: int = GEN_SEED,
 ) -> int:
-    """Write a raw test CSV with (num_surf10 + num_surf12) refractive-index
-    arrangements, all sharing the requested (F#, HFOV). Returns the row count.
-    """
+    """Write a mixed 3-6 lens test set for the requested (F#, HFOV)."""
     catalog = _load_material_catalog()
 
-    combos10 = _generate_combos(catalog, PATTERN_SURF10, num_surf10, seed)[:, : 9 * 3]
-    combos12 = _generate_combos(catalog, PATTERN_SURF12, num_surf12, seed)[:, : 11 * 3]
-
     rows: list[list[float]] = []
-    for arr in combos10:
-        material = np.concatenate([arr, np.zeros(N_INDEX - arr.shape[0], dtype=np.float64)])
-        rows.append([float(target_fn), float(target_hfov), 9, *material.tolist(), *_type_sequence(9)])
-    for arr in combos12:
-        material = np.asarray(arr, dtype=np.float64)
-        rows.append([float(target_fn), float(target_hfov), 11, *material.tolist(), *_type_sequence(11)])
+    for offset, seq_len in enumerate(SUPPORTED_SEQ_LENGTHS):
+        pattern = ["A" if i % 2 == 0 else "G" for i in range(seq_len)]
+        combos = _generate_combos(catalog, pattern, num_per_seq_length, seed + offset)
+        for arr in combos:
+            material = np.concatenate(
+                [arr, np.zeros(N_INDEX - arr.shape[0], dtype=np.float64)]
+            )
+            rows.append(
+                [
+                    float(target_fn),
+                    float(target_hfov),
+                    seq_len,
+                    *material.tolist(),
+                    *_type_sequence(seq_len),
+                ]
+            )
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(out_csv, header=None, index=False, encoding="utf-8")
@@ -180,6 +175,16 @@ def _build_test_opt(out_dir: Path, batch_size: int):
         str(out_dir),
         "--batch_size",
         str(int(batch_size)),
+        "--origin_csv",
+        str(ORIGIN_CSV),
+        "--material_csv",
+        str(MATERIAL_CSV),
+        "--max_seq_length",
+        str(MAX_SURF),
+        "--seq_lengths",
+        ",".join(str(value) for value in SUPPORTED_SEQ_LENGTHS),
+        "--ri_atol",
+        "1e-5",
         "--no_export_zmx_json",
     ]
     try:
@@ -202,6 +207,9 @@ def run_second_stage_test(test_csv: Path, out_dir: Path, *, batch_size: int = 12
 
     # Test_Model reads these at call time.
     os.environ["SCANLENS_TEST_CSV"] = str(test_csv)
+    os.environ["SCANLENS_ORIGIN_CSV"] = str(ORIGIN_CSV)
+    os.environ["SCANLENS_MATERIAL_CSV"] = str(MATERIAL_CSV)
+    os.environ["SCANLENS_RI_ATOL"] = "1e-5"
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     os.environ["SCANLENS_TEST_LIGHTWEIGHT"] = "1"
 
@@ -879,17 +887,23 @@ def run_app() -> None:
     _inject_css()
     st.title("ScanLens Lens System Generator")
 
-    if not AIRGAP_CKPT.exists():
-        st.error(f"Second-stage model checkpoint not found: {AIRGAP_CKPT}")
+    required_assets = (AIRGAP_CKPT, STAGE1_CKPT, AIRGAP_PARAMS, ORIGIN_CSV, MATERIAL_CSV)
+    missing_assets = [path for path in required_assets if not path.exists()]
+    if missing_assets:
+        st.error("Required paper-model asset not found: " + ", ".join(map(str, missing_assets)))
         return
 
     st.subheader("Target Parameters")
+    st.caption(
+        "Paper-fixed old-OTS model (epoch 5000), generating 3-6 lens systems. "
+        "Suggested range: HFOV 8-10 deg, F# 9.75-17.5"
+    )
     col1, col2 = st.columns(2)
     target_fn = col1.number_input(
-        "Target F# (suggested: 9-17.5)", value=9.75, format="%.6f", help="Suggested range: 9-17.5"
+        "Target F#", value=9.75, format="%.6f", help="Suggested range: 9.75-17.5"
     )
     target_hfov = col2.number_input(
-        "Target HFOV (deg, suggested: 8-10)", value=8.5, format="%.6f", help="Suggested range: 8-10 deg"
+        "Target HFOV (deg)", value=8.5, format="%.6f", help="Suggested range: 8-10 deg"
     )
 
     if st.button("Generate & Filter Systems", type="primary"):
