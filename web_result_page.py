@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from exports.scanlens_export_from_csv import export_from_config
+from exports.scanlens_export_from_csv import _infer_pred_nsurf_and_offset, export_from_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -59,7 +59,7 @@ N_INDEX = MAX_SURF * N_WL
 SUPPORTED_SEQ_LENGTHS = (7, 9, 11, 13)
 
 # How many arrangements to generate for the requested (F#, HFOV).
-NUM_PER_SEQ_LENGTH = 50
+NUM_PER_SEQ_LENGTH = 100
 NUM_ARRANGEMENTS = NUM_PER_SEQ_LENGTH * len(SUPPORTED_SEQ_LENGTHS)
 GEN_SEED = 42
 
@@ -91,7 +91,7 @@ def infer_efl_sidecar_csv(metrics_csv: Path) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# 1) Generate a 200-arrangement raw test set for the requested (F#, HFOV).
+# 1) Generate a mixed 3-6 lens test set for the requested (F#, HFOV).
 # ---------------------------------------------------------------------------
 def _load_material_catalog() -> np.ndarray:
     """Load exactly the refractive-index groups used by the paper model."""
@@ -290,8 +290,29 @@ def select_top_systems(metrics_csv: Path, top_n: int = NUM_TOP_SYSTEMS) -> list[
             "efl_err": efl_err,
         }
     )[passing]
-    candidates = candidates.sort_values(["rms", "row_idx"]).head(int(top_n))
-    return candidates.to_dict("records")
+    if candidates.empty:
+        return []
+
+    candidates = candidates.copy()
+    candidates["n_surf"] = [
+        _infer_pred_nsurf_and_offset(df.iloc[int(row_idx)].tolist())[0]
+        for row_idx in candidates["row_idx"]
+    ]
+    candidates["lens_count"] = (candidates["n_surf"].astype(int) - 1) // 2
+    ranked = candidates.sort_values(["rms", "row_idx"])
+
+    # Prefer structural diversity: first take the best system from each lens
+    # count, ordered by RMS. If fewer than top_n lens counts pass, fill the
+    # remaining slots with the best unused systems.
+    diverse = ranked.drop_duplicates(subset=["lens_count"], keep="first")
+    selected = diverse.head(int(top_n))
+    if len(selected) < int(top_n):
+        remaining = ranked[~ranked["row_idx"].isin(selected["row_idx"])]
+        selected = pd.concat(
+            [selected, remaining.head(int(top_n) - len(selected))],
+            ignore_index=True,
+        )
+    return selected.head(int(top_n)).to_dict("records")
 
 
 def export_best_row(
@@ -708,37 +729,6 @@ def _generate_spot_via_script(metrics_csv: Path, row_idx: int, spot_path: Path) 
     plt.close(fig)
 
 
-def _generate_distortion_from_metrics(sys_info: dict, distortion_path: Path) -> None:
-    """Draw a distortion curve consistent with the selected metrics row."""
-    import matplotlib.pyplot as plt
-
-    hfov = float(sys_info["hfov"])
-    edge_distortion_pct = float(sys_info["dist"]) * 100.0
-    field = np.linspace(0.0, hfov, 101)
-    normalized = field / max(hfov, 1e-12)
-    distortion_pct = edge_distortion_pct * normalized**3
-
-    fig, ax = plt.subplots(figsize=(4.8, 6.4), dpi=150)
-    ax.plot(distortion_pct, field, color="#087f23", linewidth=2.2)
-    ax.axvline(0.0, color="black", linewidth=0.8)
-    ax.set_xlabel("Distortion (%)", fontsize=12)
-    ax.set_ylabel("Field of View (degrees)", fontsize=12)
-    ax.set_title("Meridional Distortion", fontsize=15, fontweight="bold")
-    ax.grid(True, color="#d9d9d9", linewidth=0.7)
-    ax.text(
-        0.04,
-        0.96,
-        f"Edge: {edge_distortion_pct:.3f}%",
-        transform=ax.transAxes,
-        va="top",
-        fontsize=11,
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
-    )
-    fig.tight_layout()
-    fig.savefig(distortion_path, bbox_inches="tight")
-    plt.close(fig)
-
-
 def generate_visuals(
     json_path: str,
     out_dir: Path,
@@ -851,8 +841,6 @@ def _compute_one_system(
             metrics_csv=metrics_csv,
             row_idx=row_idx,
         )
-    _generate_distortion_from_metrics(sys_info, Path(vis["distortion_path"]))
-
     return {
         "rank": rank,
         "row_idx": row_idx,
@@ -861,12 +849,7 @@ def _compute_one_system(
         "layout_path": vis["layout_path"],
         "spot_path": vis["spot_path"],
         "distortion_path": vis["distortion_path"],
-        "fn": float(sys_info["fn"]),
-        "hfov": float(sys_info["hfov"]),
-        "rms_um": float(sys_info["rms"]) * 1000.0,
-        "distortion_pct": float(sys_info["dist"]) * 100.0,
-        "tele_deg": float(sys_info["tele"]),
-        "efl_error_pct": float(sys_info["efl_err"]) * 100.0,
+        "lens_count": int(sys_info["lens_count"]),
     }
 
 
@@ -874,16 +857,9 @@ def _display_one_system(data: dict) -> None:
     rank = data["rank"]
     row_idx = data["row_idx"]
 
-    st.markdown(f"### System {rank}")
+    st.markdown(f"### System {rank} · {data['lens_count']} lenses")
 
     with st.container(border=True):
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("RMS spot", f"{data['rms_um']:.2f} μm")
-        m2.metric("Distortion", f"{data['distortion_pct']:.3f}%")
-        m3.metric("Telecentricity", f"{data['tele_deg']:.3f}°")
-        m4.metric("EFL error", f"{data['efl_error_pct']:.2f}%")
-        st.caption(f"F# {data['fn']:.4g} · HFOV {data['hfov']:.4g}° · metrics and plots use EPD {DEFAULT_EXPORT_EPD:.1f} mm")
-
         d1, d2 = st.columns(2)
         d1.download_button(
             "Download ZMX",
