@@ -30,7 +30,7 @@ AIRGAP_CKPT = (
     PROJECT_ROOT
     / "log"
     / "3_to_6"
-    / "two_stage_full_6720_1440_9p75_17p5_0824_oldots"
+    / "ablation_oldots_no_efl_filter_0827"
     / "stage_2"
     / "airgap_unsupervised"
     / "checkpoints"
@@ -40,7 +40,7 @@ STAGE1_CKPT = (
     PROJECT_ROOT
     / "log"
     / "3_to_6"
-    / "two_stage_full_6720_1440_9p75_17p5_0824_oldots"
+    / "ablation_oldots_no_efl_filter_0827"
     / "stage_1.0"
     / "checkpoints"
     / "SLT_rmsfilter_on_epoch5000_bs512.pth"
@@ -188,6 +188,7 @@ def _build_test_opt(out_dir: Path, batch_size: int):
         ",".join(str(value) for value in SUPPORTED_SEQ_LENGTHS),
         "--ri_atol",
         "1e-5",
+        "--disable_efl_filter",
         "--no_export_zmx_json",
     ]
     try:
@@ -953,7 +954,7 @@ def run_app() -> None:
 
     st.subheader("Target Parameters")
     st.caption(
-        "Paper-fixed old-OTS model (epoch 5000), generating 3-6 lens systems. "
+        "Old-OTS no-EFL-filter model (epoch 5000), generating 3-6 lens systems. "
         "Suggested range: HFOV 8-10 deg, F# 9.75-17.5"
     )
     col1, col2 = st.columns(2)
