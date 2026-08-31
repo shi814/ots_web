@@ -12,27 +12,29 @@ from typing import Optional, Union
 
 
 def _infer_pred_nsurf_and_offset(vals, tol=1e-10):
-    """Infer 9/11-surface prediction CSV layout and CT offset."""
-    max_n = 11
+    """Infer a mixed 7/9/11/13-surface prediction row and CT offset."""
+    max_n = 13
     y0 = 2
     y1 = y0 + 3 * max_n
     ct0 = y1
     ct1 = ct0 + 2 * max_n
 
     if len(vals) < ct1:
-        if len(vals) >= 2 + 5 * 9 + 6:
-            return 9, 6
-        if len(vals) >= 2 + 5 * 9:
-            return 9, 0
-        return 11, 0
-
-    y_pad = vals[y0 + 3 * 9:y1]
-    ct_pad = vals[ct0 + 2 * 9:ct1]
+        for n_surf in (7, 9, 11, 13):
+            offset_ct = (max_n - n_surf) * 3 if n_surf < max_n else 0
+            if len(vals) >= 2 + 5 * n_surf + offset_ct:
+                return n_surf, offset_ct
+        return 13, 0
 
     def _all_near_zero(seq):
         return all(abs(float(x)) <= tol for x in seq)
 
-    return (9, 6) if _all_near_zero(y_pad) and _all_near_zero(ct_pad) else (11, 0)
+    for n_surf in (7, 9, 11):
+        y_pad = vals[y0 + 3 * n_surf:y1]
+        ct_pad = vals[ct0 + 2 * n_surf:ct1]
+        if _all_near_zero(y_pad) and _all_near_zero(ct_pad):
+            return n_surf, (max_n - n_surf) * 3
+    return 13, 0
 
 
 def _read_pred_row(csv_path, row_idx):

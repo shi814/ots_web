@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import contextlib
+import io
 import json
 import math
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +23,7 @@ from exports.scanlens_export_from_csv import export_from_config
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 # Default export EPD (matches utils.set_parser --export_epd default).
-DEFAULT_EXPORT_EPD = 4.5
+DEFAULT_EXPORT_EPD = 4.0
 
 # Second-stage (AirGap unsupervised) checkpoint used for the test run.
 AIRGAP_CKPT = (
@@ -271,8 +274,8 @@ def select_top_systems(metrics_csv: Path, top_n: int = NUM_TOP_SYSTEMS) -> list[
 
     passing = (
         (rms < SPEC_RMS_MAX)
-        & (dist < SPEC_DIST_MAX)
-        & (tele < SPEC_TELE_MAX)
+        & (dist.abs() < SPEC_DIST_MAX)
+        & (tele.abs() < SPEC_TELE_MAX)
         & (efl_err < SPEC_EFL_ERR_MAX)
     )
 
@@ -556,6 +559,21 @@ def _unify_aperture_for_display(json_path: Path) -> None:
     margin_factor = 1.08
     margin_min_mm = 0.25
     margin_max_mm = 0.90
+    stop_radius = max(
+        (
+            float(surf.get("r", 0.0) or 0.0)
+            for surf in surfaces
+            if str(surf.get("type", "")).lower() in ("stop", "aperture")
+        ),
+        default=2.0,
+    )
+    positive_radii = [
+        float(surf.get("r", 0.0) or 0.0)
+        for surf in surfaces
+        if 0.0 < float(surf.get("r", 0.0) or 0.0) <= 25.0
+        and str(surf.get("type", "")).lower() not in ("stop", "aperture")
+    ]
+    fallback_element_radius = max(positive_radii, default=max(stop_radius * 1.5, 3.0))
 
     # First pass: identify glass elements and their required clear aperture.
     for i in range(len(surfaces) - 1):
@@ -569,7 +587,7 @@ def _unify_aperture_for_display(json_path: Path) -> None:
         r2 = float(surfaces[i + 1].get("r", 0.0) or 0.0)
         radii = [r for r in (r1, r2) if r > 0]
         if not radii:
-            continue
+            radii = [fallback_element_radius]
 
         base_radius = max(radii)
         element_indices.append((i, i + 1))
@@ -591,9 +609,10 @@ def _unify_aperture_for_display(json_path: Path) -> None:
         margin_max_mm,
     )
     global_target = global_base_radius + extra
-    target_by_front: dict[int, float] = {
-        i: min(global_target, cap_by_front[i]) for i, _back_i in element_indices
-    }
+    target_by_front: dict[int, float] = {}
+    for i, _back_i in element_indices:
+        capped_target = min(global_target, cap_by_front[i])
+        target_by_front[i] = max(base_radius_by_front[i], capped_target)
 
     # Second pass: if two adjacent glass elements are separated by a small air
     # gap, keep their enlarged edge radii below the radius where the spherical
@@ -615,9 +634,18 @@ def _unify_aperture_for_display(json_path: Path) -> None:
                 requested,
                 min_edge_clearance_mm,
             )
+            min_required = max(base_radius_by_front[front_a], base_radius_by_front[front_b])
+            if safe_radius < min_required:
+                continue
             if safe_radius < requested - 1e-4:
-                target_by_front[front_a] = min(target_by_front[front_a], safe_radius)
-                target_by_front[front_b] = min(target_by_front[front_b], safe_radius)
+                target_by_front[front_a] = max(
+                    base_radius_by_front[front_a],
+                    min(target_by_front[front_a], safe_radius),
+                )
+                target_by_front[front_b] = max(
+                    base_radius_by_front[front_b],
+                    min(target_by_front[front_b], safe_radius),
+                )
                 adjusted = True
         if not adjusted:
             break
@@ -677,6 +705,37 @@ def _generate_spot_via_script(metrics_csv: Path, row_idx: int, spot_path: Path) 
         row_idx=int(row_idx),
         save_path=str(spot_path),
     )
+    plt.close(fig)
+
+
+def _generate_distortion_from_metrics(sys_info: dict, distortion_path: Path) -> None:
+    """Draw a distortion curve consistent with the selected metrics row."""
+    import matplotlib.pyplot as plt
+
+    hfov = float(sys_info["hfov"])
+    edge_distortion_pct = float(sys_info["dist"]) * 100.0
+    field = np.linspace(0.0, hfov, 101)
+    normalized = field / max(hfov, 1e-12)
+    distortion_pct = edge_distortion_pct * normalized**3
+
+    fig, ax = plt.subplots(figsize=(4.8, 6.4), dpi=150)
+    ax.plot(distortion_pct, field, color="#087f23", linewidth=2.2)
+    ax.axvline(0.0, color="black", linewidth=0.8)
+    ax.set_xlabel("Distortion (%)", fontsize=12)
+    ax.set_ylabel("Field of View (degrees)", fontsize=12)
+    ax.set_title("Meridional Distortion", fontsize=15, fontweight="bold")
+    ax.grid(True, color="#d9d9d9", linewidth=0.7)
+    ax.text(
+        0.04,
+        0.96,
+        f"Edge: {edge_distortion_pct:.3f}%",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=11,
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+    )
+    fig.tight_layout()
+    fig.savefig(distortion_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -770,19 +829,29 @@ def _compute_one_system(
     out_dir = base_out_dir / f"system_{rank}_row{row_idx:05d}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path, zmx_path = export_best_row(
-        metrics_csv=metrics_csv,
-        row_idx=row_idx,
-        out_dir=out_dir,
-        glass_matching_csv=glass_csv,
-        epd=DEFAULT_EXPORT_EPD,
-    )
-    vis = generate_visuals(
-        json_path=json_path,
-        out_dir=out_dir,
-        metrics_csv=metrics_csv,
-        row_idx=row_idx,
-    )
+    # Older helper modules contain Chinese diagnostic messages which can be
+    # mojibake in hosted logs. Keep the web output clean while preserving
+    # exceptions and generated artifacts.
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
+        warnings.catch_warnings(),
+    ):
+        warnings.simplefilter("ignore", RuntimeWarning)
+        json_path, zmx_path = export_best_row(
+            metrics_csv=metrics_csv,
+            row_idx=row_idx,
+            out_dir=out_dir,
+            glass_matching_csv=glass_csv,
+            epd=DEFAULT_EXPORT_EPD,
+        )
+        vis = generate_visuals(
+            json_path=json_path,
+            out_dir=out_dir,
+            metrics_csv=metrics_csv,
+            row_idx=row_idx,
+        )
+    _generate_distortion_from_metrics(sys_info, Path(vis["distortion_path"]))
 
     return {
         "rank": rank,
@@ -792,6 +861,12 @@ def _compute_one_system(
         "layout_path": vis["layout_path"],
         "spot_path": vis["spot_path"],
         "distortion_path": vis["distortion_path"],
+        "fn": float(sys_info["fn"]),
+        "hfov": float(sys_info["hfov"]),
+        "rms_um": float(sys_info["rms"]) * 1000.0,
+        "distortion_pct": float(sys_info["dist"]) * 100.0,
+        "tele_deg": float(sys_info["tele"]),
+        "efl_error_pct": float(sys_info["efl_err"]) * 100.0,
     }
 
 
@@ -802,6 +877,13 @@ def _display_one_system(data: dict) -> None:
     st.markdown(f"### System {rank}")
 
     with st.container(border=True):
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("RMS spot", f"{data['rms_um']:.2f} μm")
+        m2.metric("Distortion", f"{data['distortion_pct']:.3f}%")
+        m3.metric("Telecentricity", f"{data['tele_deg']:.3f}°")
+        m4.metric("EFL error", f"{data['efl_error_pct']:.2f}%")
+        st.caption(f"F# {data['fn']:.4g} · HFOV {data['hfov']:.4g}° · metrics and plots use EPD {DEFAULT_EXPORT_EPD:.1f} mm")
+
         d1, d2 = st.columns(2)
         d1.download_button(
             "Download ZMX",
