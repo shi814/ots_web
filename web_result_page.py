@@ -30,7 +30,7 @@ AIRGAP_CKPT = (
     PROJECT_ROOT
     / "log"
     / "3_to_6"
-    / "ablation_oldots_no_filters_0827"
+    / "two_stage_full_6720_1440_9p75_17p5_0824_oldots"
     / "stage_2"
     / "airgap_unsupervised"
     / "checkpoints"
@@ -40,11 +40,10 @@ STAGE1_CKPT = (
     PROJECT_ROOT
     / "log"
     / "3_to_6"
-    / "ablation_oldots_no_filters_0827"
-    / "rmsfilter_off"
+    / "two_stage_full_6720_1440_9p75_17p5_0824_oldots"
     / "stage_1.0"
     / "checkpoints"
-    / "SLT_rmsfilter_off_epoch5000_bs512.pth"
+    / "SLT_rmsfilter_on_epoch5000_bs512.pth"
 )
 AIRGAP_PARAMS = AIRGAP_CKPT.parent.parent / "parameters_airgap_unsupervised.txt"
 
