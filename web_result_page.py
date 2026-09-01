@@ -302,19 +302,7 @@ def select_top_systems(metrics_csv: Path, top_n: int = NUM_TOP_SYSTEMS) -> list[
     ]
     candidates["lens_count"] = (candidates["n_surf"].astype(int) - 1) // 2
     ranked = candidates.sort_values(["rms", "row_idx"])
-
-    # Prefer structural diversity: first take the best system from each lens
-    # count, ordered by RMS. If fewer than top_n lens counts pass, fill the
-    # remaining slots with the best unused systems.
-    diverse = ranked.drop_duplicates(subset=["lens_count"], keep="first")
-    selected = diverse.head(int(top_n))
-    if len(selected) < int(top_n):
-        remaining = ranked[~ranked["row_idx"].isin(selected["row_idx"])]
-        selected = pd.concat(
-            [selected, remaining.head(int(top_n) - len(selected))],
-            ignore_index=True,
-        )
-    return selected.head(int(top_n)).to_dict("records")
+    return ranked.head(int(top_n)).to_dict("records")
 
 
 def export_best_row(
