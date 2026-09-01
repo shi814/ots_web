@@ -954,10 +954,7 @@ def run_app() -> None:
         return
 
     st.subheader("Target Parameters")
-    st.caption(
-        "Old-OTS no-filter model (epoch 5000), generating 3-6 lens systems. "
-        "Suggested range: HFOV 8-10 deg, F# 9.75-17.5"
-    )
+    st.caption("Suggested range: HFOV 8-10 deg, F# 9.75-17.5")
     col1, col2 = st.columns(2)
     target_fn = col1.number_input(
         "Target F#", value=9.75, format="%.6f", help="Suggested range: 9.75-17.5"
